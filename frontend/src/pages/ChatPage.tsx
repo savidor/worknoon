@@ -72,6 +72,8 @@ export function ChatPage() {
     mutationFn: (content: string) =>
       api(`/conversations/${activeConversation}/messages`, { method: 'POST', body: { content }, role: 'customer' }),
     onMutate: (content) => setPending(content),
+    // Never lose what the customer typed: put it back so they can retry.
+    onError: (_err, content) => setDraft((d) => d || content),
     onSettled: async () => {
       await qc.invalidateQueries({ queryKey: ['messages', activeConversation] });
       await qc.invalidateQueries({ queryKey: ['me', customerId] });

@@ -1,5 +1,6 @@
 import { pool, type Queryable } from '../db/pool.js';
 import type { Customer, Order, OrderItem } from '../domain/types.js';
+import { RefundConflictError } from '../lib/errors.js';
 
 interface CustomerRow {
   id: string;
@@ -113,16 +114,23 @@ export async function countRefundsSince(customerId: string, since: Date): Promis
   return rows[0]?.n ?? 0;
 }
 
-/** Marks items refunded and records the ledger entry. Must run inside the case transaction. */
+/**
+ * Marks items refunded and records the ledger entry. Must run inside the case transaction.
+ * The conditional update is the double-refund guard: under concurrency only one transaction
+ * can move an item from unrefunded to refunded; any other sees zero rows and rolls back.
+ */
 export async function recordRefund(
   db: Queryable,
   args: { refundId: string; orderId: string; customerId: string; itemIds: string[]; amountCents: number; source: 'automated' | 'human_review' },
 ): Promise<void> {
   if (args.amountCents <= 0) return;
-  await db.query(
-    `UPDATE order_items SET refunded_quantity = quantity WHERE order_id = $1 AND id = ANY($2::text[])`,
+  const claimed = await db.query(
+    `UPDATE order_items SET refunded_quantity = quantity
+     WHERE order_id = $1 AND id = ANY($2::text[]) AND refunded_quantity < quantity
+     RETURNING id`,
     [args.orderId, args.itemIds],
   );
+  if (claimed.rowCount !== new Set(args.itemIds).size) throw new RefundConflictError();
   await db.query(
     `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source) VALUES ($1,$2,$3,$4,$5)`,
     [args.refundId, args.orderId, args.customerId, args.amountCents, args.source],

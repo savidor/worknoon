@@ -1,3 +1,11 @@
+/** Another request refunded the same items first. The caller re-evaluates against fresh data. */
+export class RefundConflictError extends Error {
+  constructor() {
+    super('Items were refunded by a concurrent request');
+    this.name = 'RefundConflictError';
+  }
+}
+
 /** Errors that are safe to show to API clients. Anything else becomes a generic 500. */
 export class HttpError extends Error {
   constructor(

@@ -16,7 +16,7 @@ import type {
   ReasonCategory,
   TraceStep,
 } from '../domain/types.js';
-import { HttpError } from '../lib/errors.js';
+import { HttpError, RefundConflictError } from '../lib/errors.js';
 import { caseReference } from '../lib/ids.js';
 import { logger } from '../lib/logger.js';
 import { DAY_MS, formatCents } from '../lib/money.js';
@@ -32,6 +32,7 @@ import {
 import {
   countRefundsSince,
   getCustomer,
+  getOrderById,
   getOrderByNumber,
   listOrdersForCustomer,
   recordRefund,
@@ -286,28 +287,39 @@ export async function handleCustomerTurn(args: {
   const requestedIds = order.items.filter((i) => extraction.itemSkus.includes(i.sku)).map((i) => i.id);
   const refundsInLookback = await countRefundsSince(customer.id, new Date(Date.now() - POLICY.frequencyLookbackDays * DAY_MS));
 
-  // 7. Deterministic policy decision
-  const evaluation = timed(
-    trace,
-    'policy_engine',
-    () =>
-      evaluateRefund({
-        now: new Date(),
-        customer,
-        order: order!,
-        reason,
-        requestedItemIds: requestedIds.length > 0 ? requestedIds : null,
-        signals: { refundsInLookback, manipulationSignals: manipulation, confidence: extraction.confidence, claimMismatches },
-      }),
-    (e) => ({ note: `${e.decision} (${e.rules.map((r) => r.id).join(', ')})`, data: { policyVersion: POLICY.version } }),
-  );
+  // 7. Deterministic policy decision. If a concurrent request refunds the same items
+  // between evaluation and commit, reload the order and decide again on fresh data.
+  let current: Order = order;
+  for (let attempt = 1; ; attempt++) {
+    const snapshot = current;
+    const evaluation = timed(
+      trace,
+      'policy_engine',
+      () =>
+        evaluateRefund({
+          now: new Date(),
+          customer,
+          order: snapshot,
+          reason,
+          requestedItemIds: requestedIds.length > 0 ? requestedIds : null,
+          signals: { refundsInLookback, manipulationSignals: manipulation, confidence: extraction.confidence, claimMismatches },
+        }),
+      (e) => ({ note: `${e.decision} (${e.rules.map((r) => r.id).join(', ')})`, data: { policyVersion: POLICY.version } }),
+    );
 
-  return createCase({
-    trace, audit, started, conversationId, customer, customerMessage, extraction, reason, evaluation,
-    order: order.customerId === customer.id ? order : null,
-    requestedOrderNumber: order.orderNumber,
-    aiProviderUsed: extractionCall.provider,
-  });
+    try {
+      return await createCase({
+        trace, audit, started, conversationId, customer, customerMessage, extraction, reason, evaluation,
+        order: snapshot.customerId === customer.id ? snapshot : null,
+        requestedOrderNumber: snapshot.orderNumber,
+        aiProviderUsed: extractionCall.provider,
+      });
+    } catch (err) {
+      if (!(err instanceof RefundConflictError) || attempt >= 2) throw err;
+      trace.push({ stage: 'concurrency_retry', ms: 0, status: 'warn', note: 'Items refunded by a concurrent request; re-evaluating' });
+      current = (await getOrderById(snapshot.id)) ?? snapshot;
+    }
+  }
 }
 
 function countClarifications(history: Message[]): number {

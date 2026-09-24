@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { withTransaction } from '../db/pool.js';
 import type { Decision, LineDecision } from '../domain/types.js';
-import { HttpError } from '../lib/errors.js';
+import { HttpError, RefundConflictError } from '../lib/errors.js';
 import { formatCents } from '../lib/money.js';
 import { recordEvents } from '../repositories/audit.repo.js';
 import { addMessage } from '../repositories/conversation.repo.js';
@@ -36,14 +36,19 @@ export async function reviewRequest(input: ReviewInput) {
       const refundable = new Set(order?.items.filter((i) => i.refundedQuantity < i.quantity).map((i) => i.id));
       paidLines = (row.line_decisions as LineDecision[]).filter((l) => l.decision !== 'DENIED' && refundable.has(l.itemId));
       refundAmountCents = paidLines.reduce((s, l) => s + l.amountCents, 0);
-      await recordRefund(db, {
-        refundId: `rfd_${randomUUID()}`,
-        orderId: row.order_id,
-        customerId: row.customer_id,
-        itemIds: paidLines.map((l) => l.itemId),
-        amountCents: refundAmountCents,
-        source: 'human_review',
-      });
+      try {
+        await recordRefund(db, {
+          refundId: `rfd_${randomUUID()}`,
+          orderId: row.order_id,
+          customerId: row.customer_id,
+          itemIds: paidLines.map((l) => l.itemId),
+          amountCents: refundAmountCents,
+          source: 'human_review',
+        });
+      } catch (err) {
+        if (err instanceof RefundConflictError) throw HttpError.conflict('These items were just refunded elsewhere. Reload the case.');
+        throw err;
+      }
     }
 
     await resolveReview(db, {

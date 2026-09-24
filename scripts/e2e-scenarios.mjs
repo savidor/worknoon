@@ -147,6 +147,23 @@ async function main() {
   const stats = await call('GET', '/admin/stats', { token: admin });
   check('dashboard stats reflect the run', stats.json.total >= 15 && stats.json.flagged > 0, JSON.stringify(stats.json).slice(0, 200));
 
+  console.log('\nReliability');
+  await call('POST', '/admin/demo/reset', { token: admin });
+  const racer = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_05' } })).json.token;
+  const convs = await Promise.all([1, 2, 3].map(() => call('POST', '/conversations', { token: racer })));
+  const raced = await Promise.all(
+    convs.map((c) =>
+      say({ token: racer, conversationId: c.json.id }, 'I ordered navy sneakers (WN-10005) but you sent me a red pair instead.'),
+    ),
+  );
+  const outcomes = raced.map((r) => r.outcome);
+  const after = await call('GET', '/admin/stats', { token: admin });
+  check(
+    'three simultaneous requests for one item refund it exactly once',
+    outcomes.filter((o) => o === 'APPROVED').length === 1 && after.json.refunded_cents === 14_000,
+    `outcomes ${outcomes.join(',')} refunded ${after.json.refunded_cents}`,
+  );
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);
 }

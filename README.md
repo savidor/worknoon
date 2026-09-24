@@ -11,7 +11,7 @@ Customers describe their problem in a chat. An LLM turns the message into struct
 ## Contents
 
 - [Quick start](#quick-start)
-- [Enabling a real AI model](#enabling-a-real-ai-model)
+- [Enabling the AI model](#enabling-the-ai-model)
 - [Try these scenarios](#try-these-scenarios)
 - [Architecture](#architecture)
 - [How the AI integration works](#how-the-ai-integration-works)
@@ -61,6 +61,8 @@ GEMINI_API_KEY=your-key
 ```
 
 3. Restart with `docker compose up --build`. The header badge changes from *offline mode* to the active model.
+
+**Free tier pacing.** Gemini's free tier allows roughly 5 requests per minute per model, and each chat message uses two (understand, then reply). Sending messages about 20 seconds apart keeps every reply on the model. Faster than that, the backup model takes over, and if both are saturated the offline provider answers instantly. Decisions are identical either way; only the wording is plainer, and the case trace shows which path answered.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -243,7 +245,8 @@ Defence in depth. No single layer is trusted on its own.
 | **Escalate, do not engage** | A manipulation attempt skips clarifying questions and goes straight to a human, who sees the signals and the raw message. |
 | **Output guard** | The reply may not promise a refund that was not approved, mention a dollar amount the engine did not compute, contradict the decision, leak internal terms (fraud, flags, rule ids, system prompt), or contain prompt markup. Violations fall back to a template and are logged as `security.reply_blocked`. |
 | **Data minimisation** | The model sees first name and order facts only. No emails, no account risk flags. Risk flags are also stripped from every customer API response. |
-| **Platform controls** | Helmet headers, strict CORS, 16 KB body limit, Zod validation on every input, per-customer rate limit on the AI endpoint, brute-force limit on admin login, constant-time password comparison, row lock on reviews to prevent double refunds, and the API container runs as a non-root user. |
+| **Platform controls** | Content-Security-Policy and hardening headers on every response at the edge, strict CORS, 16 KB body limit, Zod validation on every input, per-customer rate limit on the AI endpoint, brute-force limit on admin login, constant-time password comparison, and the API container runs as a non-root user. |
+| **Money safety** | Marking items refunded is an atomic conditional update, so concurrent requests (double clicks, retries) can never refund the same item twice; the losing request re-evaluates and is told the item was already refunded. Human reviews take a row lock so two reviewers cannot resolve the same case. |
 
 Customer-facing replies never reveal that anything was detected. The attacker sees a polite "a specialist will review this"; the support team sees exactly why.
 
@@ -290,7 +293,7 @@ Errors use one shape: `{ "error": { "code", "message", "details?" } }`. Every re
 ## Testing
 
 ```bash
-# Unit tests: policy engine, security layers, offline provider, policy/doc sync
+# Unit tests: policy engine, security layers, AI providers, policy/doc sync
 cd backend && npm ci && npm test
 
 # End-to-end: every scenario, access control and the review flow, over HTTP
@@ -298,8 +301,8 @@ docker compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **59 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
-- **32 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, and the specialist update reaching the customer.
+- **66 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
+- **33 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, and the specialist update reaching the customer. CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
 The model path was also tested against a stubbed model that deliberately returns a policy-violating reply (a false approval with an invented amount) to confirm the output guard blocks it and logs `security.reply_blocked`, and against model failures to confirm the fallback path.
@@ -308,13 +311,13 @@ The model path was also tested against a stubbed model that deliberately returns
 
 ## Assumptions and trade-offs
 
-- **Authentication is simulated.** The demo sign-in stands in for the store's real customer login. The important property holds: the API derives identity only from a signed token.
+- **Authentication is simulated.** The demo sign-in stands in for the store's real customer login, and the console uses one shared password with the reviewer's name recorded on each decision. The important property holds: the API derives identity only from a signed token. Tokens live in `sessionStorage` for simplicity; production would use httpOnly cookies.
 - **The engine decides, not the model.** This gives up some flexibility (the model cannot grant a goodwill exception) in exchange for auditability, determinism and resistance to manipulation. Exceptions go to humans, which is where they belong.
 - **Escalate rather than guess.** Ambiguity, low confidence, conflicting claims and manipulation all route to a person. That lowers the automation rate a little and removes a class of costly mistakes.
 - **Item-level refunds, whole quantities.** A line is refunded in full. Partial quantities would be a small extension.
 - **"Change of mind" relies on the customer's statement** that an item is unused. In production the refund would be issued on receipt of the return.
 - **Refunds are recorded, not paid.** Approvals write to a `refunds` ledger in the same transaction as the decision. A real system would hand these to the payment provider through an outbox for exactly-once delivery.
-- **Two model calls per message** (extract, then reply) rather than one. It costs a little latency but keeps the decision strictly between them, so the reply is written for a decision that already exists.
+- **Two model calls per message** (extract, then reply) rather than one. It costs a little latency and free-tier quota, but keeps the decision strictly between them, so the reply is written for a decision that already exists.
 - **Plain SQL over an ORM.** The schema is small, and explicit SQL with a tiny forward-only migrator keeps the data layer transparent for review.
 - **Polling, not websockets,** for specialist updates in the chat. Simple and adequate at this scale.
 - **Offline mode is deliberately modest.** It exists so the product always runs and always answers; the real model is noticeably better at reading unusual phrasing.
