@@ -20,12 +20,14 @@ const EnvSchema = z.object({
   ADMIN_PASSWORD: z.string().min(8).default('worknoon-admin'),
   CORS_ORIGINS: z.string().default('http://localhost:8080,http://localhost:5173'),
 
-  // AI provider selection. "auto" picks Anthropic, then OpenAI, then the offline mock.
-  AI_PROVIDER: z.enum(['auto', 'anthropic', 'openai', 'mock']).default('auto'),
+  // AI provider selection. "auto" picks Anthropic, then OpenAI, then Gemini, then the offline mock.
+  AI_PROVIDER: z.enum(['auto', 'anthropic', 'openai', 'gemini', 'mock']).default('auto'),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5-mini'),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-3.1-flash-lite'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 

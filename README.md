@@ -57,17 +57,21 @@ cp .env.example .env
 ANTHROPIC_API_KEY=sk-ant-...
 # or
 OPENAI_API_KEY=sk-...
+# or, free with no credit card (create a key at https://aistudio.google.com/apikey):
+GEMINI_API_KEY=...
 ```
 
 Restart with `docker compose up --build`. The header badge changes from *offline mode* to the active provider and model.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AI_PROVIDER` | `auto` | `auto` picks Anthropic, then OpenAI, then offline. Force with `anthropic`, `openai` or `mock`. |
+| `AI_PROVIDER` | `auto` | `auto` picks Anthropic, then OpenAI, then Gemini, then offline. Force with `anthropic`, `openai`, `gemini` or `mock`. |
 | `ANTHROPIC_API_KEY` | | Enables Claude. |
 | `ANTHROPIC_MODEL` | `claude-opus-5` | Any Claude model with structured outputs. |
 | `OPENAI_API_KEY` | | Enables OpenAI. |
 | `OPENAI_MODEL` | `gpt-5-mini` | Any model with structured outputs. |
+| `GEMINI_API_KEY` | | Enables Google Gemini (free tier available). |
+| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Any Gemini model with JSON-schema output. |
 | `AI_TIMEOUT_MS` | `30000` | Hard timeout per AI call before falling back. |
 | `ADMIN_PASSWORD` | `worknoon-admin` | Support console password. |
 | `JWT_SECRET` | dev value | Signs session tokens. Set a random value outside local review. |
@@ -120,7 +124,7 @@ flowchart LR
       AI[AI provider interface]
     end
     DB[(PostgreSQL 16)]
-    LLM[["Claude or OpenAI"]]
+    LLM[["Claude, OpenAI or Gemini"]]
     Offline[["Offline heuristics"]]
 
     Chat --> SPA
@@ -168,7 +172,7 @@ Every stage is timed and stored as a **trace** on the case, visible in the conso
 | --- | --- | --- |
 | Policy engine | `backend/src/policy/engine.ts` | Pure function. Decides refunds. No I/O, no AI, fully unit tested. |
 | Policy definition | `backend/src/policy/policy.ts` + `refund-policy.md` | Versioned thresholds and rules. A test fails if the document and the code drift apart. |
-| AI layer | `backend/src/ai/` | Provider interface, prompts, schemas, three adapters (Anthropic, OpenAI, offline). |
+| AI layer | `backend/src/ai/` | Provider interface, prompts, schemas, four adapters (Anthropic, OpenAI, Gemini, offline). |
 | Security | `backend/src/security/` | Input sanitizer, injection scanner, output guard. |
 | Orchestration | `backend/src/services/refund-pipeline.ts` | Wires the stages, handles fallbacks, owns the transaction. |
 | Data access | `backend/src/repositories/` | Parameterised SQL only. |
@@ -219,10 +223,11 @@ Precedence is **Denied > Escalated > Approved**. Nothing, including anything the
 
 ### Provider abstraction and resilience
 
-`AiProvider` has two methods, `extract` and `draftReply`. Three implementations share the same prompts and schemas:
+`AiProvider` has two methods, `extract` and `draftReply`. Four implementations share the same prompts and schemas:
 
 - **Anthropic** (`claude-opus-5` by default): `beta.messages.parse` with a Zod output format, low effort for latency, the static system prompt marked for prompt caching, and server-side refusal fallbacks (`fallbacks: "default"`).
 - **OpenAI**: `chat.completions.parse` with a Zod response format.
+- **Gemini**: `generateContent` with a JSON Schema generated from the same Zod schemas, re-validated with Zod. Its free tier makes the real AI path cost nothing to evaluate.
 - **Offline**: keyword heuristics and templates. It is the default when no key is set, and the **automatic fallback** when a model times out, errors, refuses, or returns unparseable output. The fallback is recorded in the case trace, so degraded decisions stay visible.
 
 The customer is never left without an answer, and the decision is identical either way, because it never depended on the model.
@@ -299,7 +304,7 @@ docker compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **53 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
+- **59 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
 - **32 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, and the specialist update reaching the customer.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 

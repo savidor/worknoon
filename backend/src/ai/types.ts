@@ -54,7 +54,7 @@ export interface AiResult<T> {
 }
 
 export interface AiProvider {
-  readonly name: 'anthropic' | 'openai' | 'mock';
+  readonly name: 'anthropic' | 'openai' | 'gemini' | 'mock';
   readonly model: string;
   extract(ctx: ExtractionContext, signal: AbortSignal): Promise<AiResult<Extraction>>;
   draftReply(ctx: ReplyContext, signal: AbortSignal): Promise<AiResult<ReplyDraft>>;

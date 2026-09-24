@@ -57,7 +57,7 @@ export interface Message {
 export interface Health {
   status: string;
   db: string;
-  ai: { provider: 'anthropic' | 'openai' | 'mock'; model: string };
+  ai: { provider: 'anthropic' | 'openai' | 'gemini' | 'mock'; model: string };
   policyVersion: string;
   demoMode: boolean;
 }
