@@ -38,6 +38,8 @@ const REPLY_JSON_SCHEMA = toGeminiSchema(ReplyWireSchema);
 /** Budget for one model attempt, so a slow model hands over quickly instead of stalling the chat. */
 const ATTEMPT_TIMEOUT_MS = 12_000;
 const DEFAULT_COOLDOWN_MS = 30_000;
+/** A daily quota will not recover in seconds, whatever the retry hint says. */
+const DAILY_QUOTA_COOLDOWN_MS = 60 * 60_000;
 
 /**
  * Per-model circuit breaker. A model that returns a quota, overload or timeout error is
@@ -52,8 +54,13 @@ class ModelCircuit {
   }
 
   trip(model: string, err: unknown): void {
-    const hinted = err instanceof Error ? err.message.match(/retry in ([\d.]+)s/i)?.[1] : undefined;
-    const ms = hinted ? Math.ceil(Number(hinted) * 1000) : DEFAULT_COOLDOWN_MS;
+    const message = err instanceof Error ? err.message : '';
+    const hinted = message.match(/retry in ([\d.]+)s/i)?.[1];
+    const ms = /PerDay/i.test(message)
+      ? DAILY_QUOTA_COOLDOWN_MS
+      : hinted
+        ? Math.ceil(Number(hinted) * 1000)
+        : DEFAULT_COOLDOWN_MS;
     this.openUntil.set(model, Date.now() + ms);
     logger.warn({ model, cooldownMs: ms, status: err instanceof ApiError ? err.status : undefined }, 'Gemini model paused');
   }

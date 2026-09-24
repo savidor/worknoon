@@ -90,6 +90,25 @@ describe('Gemini provider resilience', () => {
     expect(generateContent.mock.calls.length).toBe(2);
   });
 
+  it('pauses a model for an hour when its daily quota is spent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const daily = () =>
+        Promise.reject(new ApiError({ message: '{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"} Please retry in 28s.', status: 429 }));
+      generateContent.mockImplementationOnce(daily).mockResolvedValueOnce(reply).mockResolvedValueOnce(reply).mockResolvedValueOnce(reply);
+      const provider = new GeminiProvider('key', ['primary', 'backup']);
+      await provider.draftReply(ctx, signal);
+
+      vi.setSystemTime(Date.now() + 5 * 60_000); // well past the 28s hint
+      expect((await provider.draftReply(ctx, signal)).model).toBe('backup');
+
+      vi.setSystemTime(Date.now() + 61 * 60_000);
+      expect((await provider.draftReply(ctx, signal)).model).toBe('primary');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not try other models on a non-transient error', async () => {
     generateContent.mockRejectedValueOnce(new ApiError({ message: 'bad request', status: 400 }));
     const provider = new GeminiProvider('key', ['primary', 'backup']);

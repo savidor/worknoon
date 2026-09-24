@@ -25,7 +25,7 @@ const EnvSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
   // Tried in order when the primary model is rate limited or overloaded (separate free-tier quotas).
-  GEMINI_FALLBACK_MODELS: z.string().default('gemini-3-flash-preview'),
+  GEMINI_FALLBACK_MODELS: z.string().default('gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 

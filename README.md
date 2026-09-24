@@ -62,13 +62,13 @@ GEMINI_API_KEY=your-key
 
 3. Restart with `docker compose up --build`. The header badge changes from *offline mode* to the active model.
 
-**Free tier pacing.** Gemini's free tier allows roughly 5 requests per minute per model, and each chat message uses two (understand, then reply). Sending messages about 20 seconds apart keeps every reply on the model. Faster than that, the backup model takes over, and if both are saturated the offline provider answers instantly. Decisions are identical either way; only the wording is plainer, and the case trace shows which path answered.
+**Free tier limits.** Gemini's free tier is small: about 5 requests per minute and 20 per day for each model, and each chat message uses two (understand, then reply). RefundDesk spreads load across a chain of four models, each with its own quota, and pauses any model that hits a limit (for an hour when the daily quota is spent). Sending messages about 20 seconds apart keeps replies on the model; beyond the quota, the offline provider answers instantly. Decisions are identical either way; only the wording is plainer, and the case trace shows which path answered. Daily quotas reset at midnight Pacific time.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | | Enables Gemini. Without it the app runs in offline mode. |
 | `GEMINI_MODEL` | `gemini-3.5-flash` | Primary model. Any Gemini model with JSON-schema output. |
-| `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview` | Comma-separated models tried when the primary is rate limited or overloaded. |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite` | Comma-separated models tried in order when the primary is rate limited or overloaded. |
 | `AI_PROVIDER` | `gemini` | Set to `mock` to force offline mode even when a key is present. |
 | `AI_TIMEOUT_MS` | `30000` | Hard timeout per AI call before falling back. |
 | `ADMIN_PASSWORD` | `worknoon-admin` | Support console password. |
@@ -223,7 +223,7 @@ Precedence is **Denied > Escalated > Approved**. Nothing, including anything the
 
 `AiProvider` has two methods, `extract` and `draftReply`, and two implementations that share the same prompts and schemas:
 
-- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), each attempt has a 12 second budget, and a per-model **circuit breaker** pauses a failing model for Google's suggested retry delay so customers never wait on a model that is known to be down. The case trace records which model answered.
+- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), each attempt has a 12 second budget, and a per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent) so customers never wait on a model that is known to be down. The case trace records which model answered.
 - **Offline**: keyword heuristics and templates. It is the default when no key is set, and the **automatic fallback** when the model times out, errors, is blocked, or returns unparseable output. The fallback is recorded in the case trace, so degraded decisions stay visible.
 
 The customer is never left without an answer, and the decision is identical either way, because it never depended on the model. The interface also keeps the model swappable: moving to another vendor means one new adapter, with no change to the pipeline, engine, or security layers.
@@ -301,7 +301,7 @@ docker compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **66 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
+- **67 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
 - **33 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, and the specialist update reaching the customer. CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
