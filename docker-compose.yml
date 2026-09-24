@@ -1,0 +1,61 @@
+# One command to run everything:  docker compose up --build
+# Open http://localhost:8080  (customer chat, support console, policy)
+#
+# AI keys are optional. Without one, the app runs in offline mode (heuristic
+# extraction + template replies). Put keys in a .env file next to this file.
+
+name: refund-desk
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: refunddesk
+      POSTGRES_PASSWORD: refunddesk
+      POSTGRES_DB: refunddesk
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U refunddesk -d refunddesk"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://refunddesk:refunddesk@db:5432/refunddesk
+      AUTO_MIGRATE: "true"
+      SEED_ON_BOOT: "true"
+      DEMO_MODE: ${DEMO_MODE:-true}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-this-is-a-dev-only-secret}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-worknoon-admin}
+      CORS_ORIGINS: http://localhost:8080
+      AI_PROVIDER: ${AI_PROVIDER:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
