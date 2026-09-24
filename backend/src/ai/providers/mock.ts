@@ -5,15 +5,15 @@ import { templateReply } from '../templates.js';
 import type { AiProvider, AiResult, ExtractionContext, ReplyContext, ReplyDraft } from '../types.js';
 
 const REASONS: Array<[ReasonCategory, RegExp]> = [
-  ['not_received', /(never (arrived|came|showed up|got here)|(not|n't|never) (yet )?(been )?(received|arrived|delivered|got it)|didn'?t (arrive|come|get)|missing (parcel|package)|lost (parcel|package))/i],
+  ['not_received', /(never (arrived|came|showed up|got here)|nothing (was )?(on|at) my (door|doorstep|porch)|(not|n't|never) (yet )?(been )?(received|arrived|delivered|got it)|didn'?t (arrive|come|get)|missing (parcel|package)|lost (parcel|package))/i],
   ['cancel_order', /\bcancel/i],
-  ['wrong_item', /((wrong|incorrect|different) (item|product|size|colou?r|model|one|version)|not what i ordered|sent (me )?(the |a )?(wrong|different)|\binstead\b)/i],
-  ['damaged_or_defective', /(damaged|broken|broke|cracked|smashed|shattered|defective|faulty|torn|dented|scratched|stopped working|(doesn'?t|does not|won'?t|will not) (work|turn on|charge|power)|not working|dead on arrival|malfunction|flicker)/i],
+  ['wrong_item', /((wrong|incorrect|different) (item|product|size|colou?r|model|one|version)|not what i ordered|not the [a-z0-9 -]{0,24}?(one|model|kind|version|colou?r|size) i (paid for|ordered|bought)|sent (me )?(the |a )?(wrong|different)|\binstead\b)/i],
+  ['damaged_or_defective', /(damaged|broken|broke|snapped|cracked|smashed|shattered|leaking|ripped|defective|faulty|torn|dented|scratched|stopped working|(doesn'?t|does not|won'?t|will not) (work|turn on|charge|power)|not working|dead on arrival|malfunction|flicker)/i],
   ['not_as_described', /(not as described|doesn'?t match|does not match|looks (nothing|different)|misleading|not like the (photo|picture))/i],
-  ['changed_mind', /(changed my mind|(don'?t|do not) (need|want|like)|no longer (need|want)|unused|never used|unopened|didn'?t like|not for me|(doesn'?t|does not|didn'?t) fit|too (small|big|large|tight|loose)|by mistake|return (it|them|both))/i],
+  ['changed_mind', /(changed my mind|(don'?t|do not) (need|want|like)|no longer (need|want)|unused|never used|unopened|didn'?t like|not for me|(doesn'?t|does not|didn'?t) fit|too (small|big|large|tight|loose)|by mistake|too many|never (took|taken) it out|(still )?in the (bag|box|packaging)|send (it|them) back|return (it|them|both))/i],
 ];
 
-const REFUND_WORDS = /\b(refund|return|money back|reimburse|send (it|them) back|charge ?back|cancel)/i;
+const REFUND_WORDS = /\b(refund|return|money back|reimburse|send (it|them) back|charge ?back|cancel|approve)/i;
 const INQUIRY_WORDS = /\b(where is|status|track(ing)?|when will|has (it|my order) shipped)\b/i;
 const STOPWORDS = new Set(['with', 'from', 'this', 'that', 'final', 'sale', 'pro', 'set', 'the', 'and', 'for']);
 
