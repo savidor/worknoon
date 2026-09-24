@@ -1,8 +1,8 @@
 # One command to run everything:  docker compose up --build
 # Open http://localhost:8080  (customer chat, support console, policy)
 #
-# AI keys are optional. Without one, the app runs in offline mode (heuristic
-# extraction + template replies). Put keys in a .env file next to this file.
+# The AI key is optional. Without it, the app runs in offline mode (heuristic
+# extraction + template replies). Put GEMINI_API_KEY in a .env file next to this file.
 
 name: refund-desk
 
@@ -34,13 +34,10 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production-this-is-a-dev-only-secret}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-worknoon-admin}
       CORS_ORIGINS: http://localhost:8080
-      AI_PROVIDER: ${AI_PROVIDER:-auto}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS:-gemini-3-flash-preview}
       AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:

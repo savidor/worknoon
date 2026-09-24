@@ -72,7 +72,7 @@ async function runAi<T>(
       stage,
       ms: Math.round(performance.now() - t0),
       status: 'ok',
-      note: `${aiProvider.name}:${aiProvider.model}`,
+      note: `${aiProvider.name}:${res.model ?? aiProvider.model}`,
       data: { usage: res.usage },
     });
     return { data: res.data, usage: res.usage, provider: aiProvider, fellBack: false };

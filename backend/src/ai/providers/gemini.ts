@@ -1,7 +1,8 @@
-import { GoogleGenAI } from '@google/genai';
+import { ApiError, GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
 import type { Extraction } from '../../domain/types.js';
 import { nonce } from '../../lib/ids.js';
+import { logger } from '../../lib/logger.js';
 import { EXTRACTION_SYSTEM, REPLY_SYSTEM, buildExtractionUser, buildReplyUser } from '../prompts.js';
 import { ExtractionWireSchema, ReplyWireSchema, toExtraction } from '../schemas.js';
 import {
@@ -34,39 +35,75 @@ function toGeminiSchema(schema: z.ZodType): unknown {
 const EXTRACTION_JSON_SCHEMA = toGeminiSchema(ExtractionWireSchema);
 const REPLY_JSON_SCHEMA = toGeminiSchema(ReplyWireSchema);
 
+/** Budget for one model attempt, so a slow model hands over quickly instead of stalling the chat. */
+const ATTEMPT_TIMEOUT_MS = 12_000;
+const DEFAULT_COOLDOWN_MS = 30_000;
+
 /**
- * Google Gemini adapter, using the same prompts and schemas as the other providers.
- * Gemini has a free tier, which makes it a zero-cost way to run the real AI path.
- * The response is JSON-schema constrained and then re-validated with Zod.
+ * Per-model circuit breaker. A model that returns a quota, overload or timeout error is
+ * skipped until its cooldown ends (Google's suggested retry delay when it gives one),
+ * so customers never wait on a model that is known to be failing.
+ */
+class ModelCircuit {
+  private readonly openUntil = new Map<string, number>();
+
+  available(model: string): boolean {
+    return (this.openUntil.get(model) ?? 0) <= Date.now();
+  }
+
+  trip(model: string, err: unknown): void {
+    const hinted = err instanceof Error ? err.message.match(/retry in ([\d.]+)s/i)?.[1] : undefined;
+    const ms = hinted ? Math.ceil(Number(hinted) * 1000) : DEFAULT_COOLDOWN_MS;
+    this.openUntil.set(model, Date.now() + ms);
+    logger.warn({ model, cooldownMs: ms, status: err instanceof ApiError ? err.status : undefined }, 'Gemini model paused');
+  }
+}
+
+function isTransient(err: unknown): boolean {
+  if (err instanceof ApiError) return [408, 429, 500, 502, 503, 504].includes(err.status);
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError' || /fetch failed|timed? ?out/i.test(err.message));
+}
+
+/**
+ * Google Gemini adapter. Both calls use JSON-schema constrained output generated from
+ * the shared Zod schemas, and every response is re-validated with Zod before use.
+ *
+ * Requests go to the primary model and move down the chain on transient failures
+ * (each model has its own free-tier quota). If every model is unavailable the call
+ * throws and the pipeline falls back to the deterministic offline provider.
  */
 export class GeminiProvider implements AiProvider {
   readonly name = 'gemini' as const;
+  readonly model: string;
   private readonly client: GoogleGenAI;
+  private readonly circuit = new ModelCircuit();
 
   constructor(
     apiKey: string,
-    readonly model: string,
-    timeoutMs: number,
+    private readonly models: string[],
   ) {
-    this.client = new GoogleGenAI({ apiKey, httpOptions: { timeout: timeoutMs } });
+    if (models.length === 0) throw new Error('At least one Gemini model is required');
+    this.model = models[0]!;
+    this.client = new GoogleGenAI({ apiKey, httpOptions: { timeout: ATTEMPT_TIMEOUT_MS } });
   }
 
   async extract(ctx: ExtractionContext, signal: AbortSignal): Promise<AiResult<Extraction>> {
-    const { parsed, usage } = await this.call(
+    const { parsed, usage, model } = await this.call(
       EXTRACTION_SYSTEM,
       buildExtractionUser(ctx, nonce()),
       ExtractionWireSchema,
       EXTRACTION_JSON_SCHEMA,
       signal,
     );
-    return { data: toExtraction(parsed), usage };
+    return { data: toExtraction(parsed), usage, model };
   }
 
   async draftReply(ctx: ReplyContext, signal: AbortSignal): Promise<AiResult<ReplyDraft>> {
-    const { parsed, usage } = await this.call(REPLY_SYSTEM, buildReplyUser(ctx), ReplyWireSchema, REPLY_JSON_SCHEMA, signal);
+    const { parsed, usage, model } = await this.call(REPLY_SYSTEM, buildReplyUser(ctx), ReplyWireSchema, REPLY_JSON_SCHEMA, signal);
     return {
       data: { customerReply: parsed.customer_reply.trim(), internalNote: parsed.internal_note.trim() },
       usage,
+      model,
     };
   }
 
@@ -76,16 +113,41 @@ export class GeminiProvider implements AiProvider {
     schema: S,
     jsonSchema: unknown,
     signal: AbortSignal,
+  ): Promise<{ parsed: z.infer<S>; usage: AiUsage; model: string }> {
+    const candidates = this.models.filter((m) => this.circuit.available(m));
+    if (candidates.length === 0) throw new Error('All Gemini models are cooling down after errors');
+
+    let lastError: unknown;
+    for (const model of candidates) {
+      if (signal.aborted) break;
+      try {
+        return { ...(await this.generate(model, system, user, schema, jsonSchema, signal)), model };
+      } catch (err) {
+        lastError = err;
+        if (!isTransient(err)) throw err;
+        this.circuit.trip(model, err);
+      }
+    }
+    throw lastError ?? new Error('Gemini request aborted');
+  }
+
+  private async generate<S extends z.ZodType>(
+    model: string,
+    system: string,
+    user: string,
+    schema: S,
+    jsonSchema: unknown,
+    signal: AbortSignal,
   ): Promise<{ parsed: z.infer<S>; usage: AiUsage }> {
     const response = await this.client.models.generateContent({
-      model: this.model,
+      model,
       contents: user,
       config: {
         systemInstruction: system,
         responseMimeType: 'application/json',
         responseJsonSchema: jsonSchema,
         temperature: 0.2,
-        abortSignal: signal,
+        abortSignal: AbortSignal.any([signal, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]),
       },
     });
 

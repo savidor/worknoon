@@ -20,14 +20,12 @@ const EnvSchema = z.object({
   ADMIN_PASSWORD: z.string().min(8).default('worknoon-admin'),
   CORS_ORIGINS: z.string().default('http://localhost:8080,http://localhost:5173'),
 
-  // AI provider selection. "auto" picks Anthropic, then OpenAI, then Gemini, then the offline mock.
-  AI_PROVIDER: z.enum(['auto', 'anthropic', 'openai', 'gemini', 'mock']).default('auto'),
-  ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-5-mini'),
+  // "gemini" uses the model when GEMINI_API_KEY is set; "mock" forces offline mode.
+  AI_PROVIDER: z.enum(['gemini', 'mock']).default('gemini'),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().default('gemini-3.1-flash-lite'),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
+  // Tried in order when the primary model is rate limited or overloaded (separate free-tier quotas).
+  GEMINI_FALLBACK_MODELS: z.string().default('gemini-3-flash-preview'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 

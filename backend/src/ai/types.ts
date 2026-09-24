@@ -51,10 +51,12 @@ export interface AiUsage {
 export interface AiResult<T> {
   data: T;
   usage?: AiUsage;
+  /** The model that actually answered, when a provider can route between several. */
+  model?: string;
 }
 
 export interface AiProvider {
-  readonly name: 'anthropic' | 'openai' | 'gemini' | 'mock';
+  readonly name: 'gemini' | 'mock';
   readonly model: string;
   extract(ctx: ExtractionContext, signal: AbortSignal): Promise<AiResult<Extraction>>;
   draftReply(ctx: ReplyContext, signal: AbortSignal): Promise<AiResult<ReplyDraft>>;

@@ -1,24 +1,17 @@
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
-import { AnthropicProvider } from './providers/anthropic.js';
 import { GeminiProvider } from './providers/gemini.js';
 import { MockProvider } from './providers/mock.js';
-import { OpenAiProvider } from './providers/openai.js';
 import type { AiProvider } from './types.js';
 
+/** Gemini when a key is configured, otherwise the deterministic offline provider. */
 function createProvider(): AiProvider {
-  const wanted = env.AI_PROVIDER;
-  if ((wanted === 'auto' || wanted === 'anthropic') && env.ANTHROPIC_API_KEY) {
-    return new AnthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODEL, env.AI_TIMEOUT_MS);
+  if (env.AI_PROVIDER === 'gemini' && env.GEMINI_API_KEY) {
+    const fallbacks = env.GEMINI_FALLBACK_MODELS.split(',').map((m) => m.trim()).filter(Boolean);
+    return new GeminiProvider(env.GEMINI_API_KEY, [...new Set([env.GEMINI_MODEL, ...fallbacks])]);
   }
-  if ((wanted === 'auto' || wanted === 'openai') && env.OPENAI_API_KEY) {
-    return new OpenAiProvider(env.OPENAI_API_KEY, env.OPENAI_MODEL, env.AI_TIMEOUT_MS);
-  }
-  if ((wanted === 'auto' || wanted === 'gemini') && env.GEMINI_API_KEY) {
-    return new GeminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL, env.AI_TIMEOUT_MS);
-  }
-  if (wanted !== 'auto' && wanted !== 'mock') {
-    logger.warn({ wanted }, 'AI provider requested but no API key set; using offline mock provider');
+  if (env.AI_PROVIDER === 'gemini') {
+    logger.warn('GEMINI_API_KEY is not set; running in offline mode');
   }
   return new MockProvider();
 }
