@@ -44,7 +44,7 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "4000:4000"
+      - "${API_PORT:-4000}:4000"
     restart: unless-stopped
 
   frontend:
@@ -53,7 +53,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "8080:80"
+      - "${WEB_PORT:-8080}:80"
     restart: unless-stopped
 
 volumes:

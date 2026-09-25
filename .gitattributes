@@ -1,0 +1,4 @@
+# Keep line endings as LF on every platform, so Dockerfiles, nginx config and SQL behave
+# the same on Windows checkouts as on macOS and Linux.
+* text=auto eol=lf
+*.png binary

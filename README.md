@@ -47,6 +47,8 @@ Then open **http://localhost:8080**.
 | Refund policy | http://localhost:8080/policy |
 | API health | http://localhost:4000/api/health |
 
+**If a port is already in use** (the error mentions `port is already allocated`), pick other ports, for example `WEB_PORT=8081 API_PORT=4001 docker-compose up`, and open http://localhost:8081 instead. If an earlier attempt left things half-built, `docker-compose down -v` resets everything, including the database.
+
 **No API key is required.** Without one, the app runs in **offline mode**: keyword heuristics extract the request and templates write the replies. Every feature, decision, and security control works the same, so you can evaluate the whole product immediately. The header shows which mode is active.
 
 The database migrates and seeds itself on first boot, including **a week of sample activity** so the console is populated from the start: about 20 cases from background customers covering approvals, denials, specialist reviews, a cross-account attempt and prompt injections. They are produced by running real requests through the real pipeline (offline, no model quota) and moving their timestamps into the past. They are separate from the 15 demo personas below, so every persona's suggested prompts behave as documented. Use **Reset demo** in the console to start fresh at any time.
@@ -80,6 +82,7 @@ GEMINI_API_KEY=your-key
 | `ADMIN_PASSWORD` | `worknoon-admin` | Support console password. |
 | `JWT_SECRET` | dev value | Signs session tokens. Set a random value outside local review. |
 | `DEMO_MODE` | `true` | Enables the demo customer switcher and data reset. |
+| `WEB_PORT` / `API_PORT` | `8080` / `4000` | Host ports for the app and the API. |
 
 ## Try these scenarios
 
