@@ -79,14 +79,15 @@ export async function reseed(): Promise<void> {
 
       // Historical orders that were refunded, so the frequency rule has real ledger data behind it.
       for (const [idx, r] of (c.pastRefunds ?? []).entries()) {
-        const number = `WN-0${c.id.slice(-2)}${idx + 1}${idx + 1}`.slice(0, 8);
+        // Earlier orders use a lower number range than the customer's current orders, as a real store's would.
+        const number = `WN-09${c.id.slice(-2)}${idx + 1}`;
         const { orderId } = await insertOrder(client, c.id, now, {
           number,
           status: 'delivered',
           orderedDaysAgo: r.daysAgo + 8,
           shippedDaysAgo: r.daysAgo + 7,
           deliveredDaysAgo: r.daysAgo + 4,
-          items: [{ sku: `HIS-${idx + 1}`, name: `Past purchase #${idx + 1}`, category: 'general', priceCents: r.cents, refunded: true }],
+          items: [{ sku: `HIS-${c.id.slice(-2)}-${idx + 1}`, name: r.name, category: r.category, priceCents: r.cents, refunded: true }],
         });
         await client.query(
           `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, created_at) VALUES ($1,$2,$3,$4,'historical',$5)`,

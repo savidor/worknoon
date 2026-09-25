@@ -209,11 +209,7 @@ export function ChatPage() {
           {me.isLoading ? (
             <Spinner />
           ) : (
-            <ul className="divide-y divide-slate-100">
-              {me.data?.orders.map((o) => (
-                <OrderRow key={o.id} order={o} onPick={() => insert(`About order ${o.orderNumber}: `)} />
-              ))}
-            </ul>
+            <OrderList orders={me.data?.orders ?? []} onPick={(o) => insert(`About order ${o.orderNumber}: `)} />
           )}
         </Card>
 
@@ -312,6 +308,48 @@ export function ChatPage() {
   );
 }
 
+const isClosed = (o: Order) => o.status === 'cancelled' || o.items.every((i) => i.refundedQuantity >= i.quantity);
+
+/** Orders a customer might still ask about come first; fully refunded or cancelled ones fold away. */
+function OrderList({ orders, onPick }: { orders: Order[]; onPick: (o: Order) => void }) {
+  const [showClosed, setShowClosed] = useState(false);
+  const open = orders.filter((o) => !isClosed(o));
+  const closed = orders.filter(isClosed);
+  // With nothing open, the closed orders are all there is to talk about: show them.
+  const expanded = showClosed || open.length === 0;
+  return (
+    <>
+      <ul className="divide-y divide-slate-100">
+        {open.map((o) => (
+          <OrderRow key={o.id} order={o} onPick={() => onPick(o)} />
+        ))}
+      </ul>
+      {closed.length > 0 && (
+        <>
+          {open.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowClosed(!showClosed)}
+              aria-expanded={expanded}
+              className="flex w-full items-center gap-1.5 border-t border-slate-100 px-4 py-2.5 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            >
+              <ChevronRight className={cx('size-3.5 transition', expanded && 'rotate-90')} aria-hidden />
+              Refunded or cancelled orders ({closed.length})
+            </button>
+          )}
+          {expanded && (
+            <ul className="divide-y divide-slate-100 border-t border-slate-100">
+              {closed.map((o) => (
+                <OrderRow key={o.id} order={o} onPick={() => onPick(o)} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 function OrderRow({ order, onPick }: { order: Order; onPick: () => void }) {
   const age = daysSince(order.deliveredAt);
   const windowLeft = age === null ? null : 30 - age;
@@ -331,13 +369,13 @@ function OrderRow({ order, onPick }: { order: Order; onPick: () => void }) {
             <li key={i.id} className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
               <span className="truncate">{i.name}</span>
               {i.finalSale && <Pill tone="rose">Final sale</Pill>}
-              {i.refundedQuantity >= i.quantity && <Pill>Refunded</Pill>}
+              {i.refundedQuantity >= i.quantity && !fullyRefunded && <Pill>Refunded</Pill>}
             </li>
           ))}
         </ul>
         <p className="mt-1.5 pl-6 text-[11px] text-slate-500">
           {order.status === 'delivered'
-            ? `Delivered ${shortDate(order.deliveredAt)} · ${fullyRefunded ? 'refunded' : windowLeft !== null && windowLeft >= 0 ? `${windowLeft} days left to request a refund` : 'refund window closed'}`
+            ? `Delivered ${shortDate(order.deliveredAt)} · ${fullyRefunded ? 'refunded in full' : windowLeft !== null && windowLeft >= 0 ? `${windowLeft} days left to request a refund` : 'refund window closed'}`
             : order.status === 'shipped'
               ? `In transit · expected ${shortDate(order.expectedDeliveryAt)}`
               : order.status === 'processing'

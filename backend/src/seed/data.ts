@@ -33,7 +33,8 @@ export interface SeedCustomer {
   flags?: string[];
   memberSinceDaysAgo: number;
   /** Past refunds (days ago, cents) for the frequency rule. */
-  pastRefunds?: Array<{ daysAgo: number; cents: number }>;
+  /** Refunds made before RefundDesk existed, each on its own earlier order. */
+  pastRefunds?: Array<{ daysAgo: number; cents: number; name: string; category: string }>;
   orders: SeedOrder[];
   scenario: { title: string; expected: 'APPROVED' | 'DENIED' | 'ESCALATED' | 'NEEDS_INFO'; prompts: string[] };
 }
@@ -159,10 +160,10 @@ export const SEED_CUSTOMERS: SeedCustomer[] = [
     tier: 'standard',
     memberSinceDaysAgo: 150,
     pastRefunds: [
-      { daysAgo: 12, cents: 6_500 },
-      { daysAgo: 31, cents: 11_000 },
-      { daysAgo: 55, cents: 4_900 },
-      { daysAgo: 80, cents: 8_800 },
+      { daysAgo: 12, cents: 6_500, name: 'Coastline Linen Shirt', category: 'apparel' },
+      { daysAgo: 31, cents: 11_000, name: 'TrailGrip Hiking Boots', category: 'footwear' },
+      { daysAgo: 55, cents: 4_900, name: 'Bamboo Yoga Mat', category: 'sports' },
+      { daysAgo: 80, cents: 8_800, name: 'Nordic Wool Throw Blanket', category: 'home' },
     ],
     orders: [
       {
