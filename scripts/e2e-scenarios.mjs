@@ -164,6 +164,46 @@ async function main() {
     `outcomes ${outcomes.join(',')} refunded ${after.json.refunded_cents}`,
   );
 
+  console.log('\nPolicy studio');
+  await call('POST', '/admin/demo/reset', { token: admin });
+  const studio = await call('GET', '/admin/policy', { token: admin });
+  check('studio loads the active policy and catalogue', studio.status === 200 && studio.json.active.version.endsWith('-r1') && studio.json.catalog.orders.length >= 15);
+  const homeRule = {
+    name: 'Home goods change of mind',
+    enabled: true,
+    effect: 'DENIED',
+    customerText: 'home goods can only be returned for a change of mind within 7 days of delivery',
+    conditions: [
+      { field: 'item.category', operator: 'eq', value: 'home' },
+      { field: 'reason', operator: 'eq', value: 'changed_mind' },
+      { field: 'days_since_delivery', operator: 'gt', value: 7 },
+    ],
+  };
+  const draft = { config: { ...studio.json.active.config, humanReviewThresholdCents: 150_000 }, customRules: [homeRule] };
+  const sim = await call('POST', '/admin/policy/simulate', { token: admin, body: { draft, orderNumber: 'WN-10013', reason: 'changed_mind' } });
+  check('simulation compares active and draft without saving', sim.json.active?.decision === 'APPROVED' && sim.json.draft?.decision === 'DENIED');
+  const approveRule = await call('POST', '/admin/policy/publish', { token: admin, body: { draft: { ...draft, customRules: [{ ...homeRule, effect: 'APPROVED' }] }, note: 'try to approve' } });
+  check('a custom rule can never approve', approveRule.status === 400);
+  const leak = await call('POST', '/admin/policy/publish', { token: admin, body: { draft: { ...draft, customRules: [{ ...homeRule, customerText: 'your account is flagged for fraud review' }] }, note: 'leaky wording' } });
+  check('customer wording cannot leak internal terms', leak.status === 400);
+  const customerPublish = await call('POST', '/admin/policy/publish', { body: { draft, note: 'nope' } });
+  check('publishing requires an admin', customerPublish.status === 401);
+  const published = await call('POST', '/admin/policy/publish', { token: admin, body: { draft, note: 'Home goods 7-day change of mind; review threshold $1,500' } });
+  check('publishing creates a new active version', published.status === 201 && published.json.version?.version.endsWith('-r2'));
+  const olivia = await customerSession('cus_13');
+  const blanket = await say(olivia, "It's the throw blanket from WN-10013, I changed my mind and it's unused.");
+  check('the chat follows the published custom rule', blanket.outcome === 'DENIED' && blanket.assistantMessage.content.includes('7 days'), blanket.assistantMessage.content);
+  const liamR2 = await say(await customerSession('cus_04'), 'My ZenBook laptop from WN-10004 is defective and will not charge.');
+  check('the chat follows the published threshold', liamR2.outcome === 'APPROVED', liamR2.outcome);
+  const doc = await call('GET', '/policy');
+  check('the public policy page shows the new version', doc.json.version.endsWith('-r2') && doc.json.markdown.includes('above $1,500') && doc.json.markdown.includes('**9.1**'));
+  const r1 = (await call('GET', '/admin/policy', { token: admin })).json.versions.find((v) => v.version.endsWith('-r1'));
+  const rollback = await call('POST', `/admin/policy/versions/${r1.id}/activate`, { token: admin, body: { note: 'Restore original policy' } });
+  check('an earlier version can be restored', rollback.status === 200 && rollback.json.version.isActive);
+  const grace = await say(await customerSession('cus_11'), 'Return the yoga mat and sunglasses from WN-10011, changed my mind, unused.');
+  check('decisions follow the restored version', grace.outcome === 'APPROVED');
+  await call('POST', '/admin/demo/reset', { token: admin });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);
 }

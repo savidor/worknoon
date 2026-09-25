@@ -21,7 +21,7 @@ import { caseReference } from '../lib/ids.js';
 import { logger } from '../lib/logger.js';
 import { DAY_MS, formatCents } from '../lib/money.js';
 import { evaluateRefund } from '../policy/engine.js';
-import { POLICY, RULES, type RuleId } from '../policy/policy.js';
+import { ruleCatalog, type ActivePolicy, type RuleDefinition } from '../policy/policy.js';
 import { recordEvents, type AuditEvent } from '../repositories/audit.repo.js';
 import {
   addMessage,
@@ -40,6 +40,7 @@ import {
 import { findOpenEscalation, insertRequest } from '../repositories/request.repo.js';
 import { guardReply } from '../security/output-guard.js';
 import { sanitizeInput, scanForInjection } from '../security/input.js';
+import { getActivePolicy } from './policy.service.js';
 import { isActiveOrder, orderForAi, orderLabel, orderStatusLine } from './presenters.js';
 
 export interface TurnResult {
@@ -131,7 +132,8 @@ export async function handleCustomerTurn(args: {
   }));
 
   // 2. Load context (identity comes from the session, never from the message)
-  const [customer, orders, history] = await Promise.all([
+  const [policy, customer, orders, history] = await Promise.all([
+    getActivePolicy(),
     getCustomer(args.customerId),
     listOrdersForCustomer(args.customerId),
     listMessages(conversationId, 12),
@@ -219,7 +221,7 @@ export async function handleCustomerTurn(args: {
   if (!isRefundIntent && manipulation.length === 0) {
     const ownOrder = order && order.customerId === customer.id ? order : null;
     return replyWithoutCase({
-      trace, audit, started, conversationId, customerMessage, extraction, outcome: 'INFO',
+      trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'INFO',
       ctx: {
         ...ctxBase,
         outcome: 'INFO',
@@ -241,9 +243,9 @@ export async function handleCustomerTurn(args: {
   // 5b. Clarify, or escalate if we have already asked too many times.
   if (missing.length > 0 || !order) {
     const askedSinceLastCase = countClarifications(history);
-    if (askedSinceLastCase >= POLICY.maxClarificationTurns) {
+    if (askedSinceLastCase >= policy.config.maxClarificationTurns) {
       return createCase({
-        trace, audit, started, conversationId, customer, customerMessage, extraction, reason,
+        trace, audit, started, policy, conversationId, customer, customerMessage, extraction, reason,
         order: order && order.customerId === customer.id ? order : null,
         evaluation: {
           decision: 'ESCALATED',
@@ -257,7 +259,7 @@ export async function handleCustomerTurn(args: {
       });
     }
     return replyWithoutCase({
-      trace, audit, started, conversationId, customerMessage, extraction, outcome: 'NEEDS_INFO',
+      trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'NEEDS_INFO',
       ctx: { ...ctxBase, outcome: 'NEEDS_INFO', orderNumber: order?.orderNumber ?? null, missingInfo: missing },
     });
   }
@@ -267,7 +269,7 @@ export async function handleCustomerTurn(args: {
     const open = await findOpenEscalation(order.id);
     if (open) {
       return replyWithoutCase({
-        trace, audit, started, conversationId, customerMessage, extraction, outcome: 'ESCALATED',
+        trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'ESCALATED',
         ctx: { ...ctxBase, outcome: 'ESCALATED', orderNumber: order.orderNumber, caseReference: open.reference, isDuplicate: true },
         metaExtra: { caseId: open.id, caseReference: open.reference },
       });
@@ -285,7 +287,7 @@ export async function handleCustomerTurn(args: {
     );
   }
   const requestedIds = order.items.filter((i) => extraction.itemSkus.includes(i.sku)).map((i) => i.id);
-  const refundsInLookback = await countRefundsSince(customer.id, new Date(Date.now() - POLICY.frequencyLookbackDays * DAY_MS));
+  const refundsInLookback = await countRefundsSince(customer.id, new Date(Date.now() - policy.config.frequencyLookbackDays * DAY_MS));
 
   // 7. Deterministic policy decision. If a concurrent request refunds the same items
   // between evaluation and commit, reload the order and decide again on fresh data.
@@ -303,13 +305,13 @@ export async function handleCustomerTurn(args: {
           reason,
           requestedItemIds: requestedIds.length > 0 ? requestedIds : null,
           signals: { refundsInLookback, manipulationSignals: manipulation, confidence: extraction.confidence, claimMismatches },
-        }),
-      (e) => ({ note: `${e.decision} (${e.rules.map((r) => r.id).join(', ')})`, data: { policyVersion: POLICY.version } }),
+        }, policy),
+      (e) => ({ note: `${e.decision} (${e.rules.map((r) => r.id).join(', ')})`, data: { policyVersion: policy.version } }),
     );
 
     try {
       return await createCase({
-        trace, audit, started, conversationId, customer, customerMessage, extraction, reason, evaluation,
+        trace, audit, started, policy, conversationId, customer, customerMessage, extraction, reason, evaluation,
         order: snapshot.customerId === customer.id ? snapshot : null,
         requestedOrderNumber: snapshot.orderNumber,
         aiProviderUsed: extractionCall.provider,
@@ -332,9 +334,14 @@ function countClarifications(history: Message[]): number {
   return n;
 }
 
-function customerReasons(evaluation: PolicyEvaluation): string[] {
+function customerReasons(evaluation: PolicyEvaluation, catalog: Map<string, RuleDefinition>): string[] {
   const relevant = evaluation.rules.filter((r) => r.effect === evaluation.decision);
-  return [...new Set(relevant.map((r) => RULES[r.id as RuleId]?.customerText).filter((t): t is string => !!t))];
+  return [...new Set(relevant.map((r) => catalog.get(r.id)?.customerText).filter((t): t is string => !!t))];
+}
+
+/** Dollar amounts quoted in rule wording (such as a review threshold) are legitimate in replies. */
+function amountsIn(texts: string[]): number[] {
+  return texts.flatMap((t) => [...t.matchAll(/\$\s?([\d,]+(?:\.\d{2})?)/g)].map((m) => Math.round(Number(m[1]!.replace(/,/g, '')) * 100)));
 }
 
 async function draftGuardedReply(
@@ -384,6 +391,7 @@ async function replyWithoutCase(args: {
   trace: TraceStep[];
   audit: AuditEvent[];
   started: number;
+  policy: ActivePolicy;
   conversationId: string;
   customerMessage: Message;
   extraction: Extraction;
@@ -392,7 +400,7 @@ async function replyWithoutCase(args: {
   metaExtra?: MessageMeta;
 }): Promise<TurnResult> {
   const ctx: ReplyContext = { ...emptyCtx, ...args.ctx };
-  const { draft } = await draftGuardedReply(args.trace, args.audit, ctx, [POLICY.humanReviewThresholdCents], args.conversationId);
+  const { draft } = await draftGuardedReply(args.trace, args.audit, ctx, [args.policy.config.humanReviewThresholdCents, ...amountsIn(ctx.reasons)], args.conversationId);
   const assistantMessage = await withTransaction(async (db) => {
     const msg = await addMessage(
       {
@@ -423,6 +431,7 @@ async function createCase(args: {
   trace: TraceStep[];
   audit: AuditEvent[];
   started: number;
+  policy: ActivePolicy;
   conversationId: string;
   customer: Customer;
   customerMessage: Message;
@@ -443,8 +452,9 @@ async function createCase(args: {
   const approved = evaluation.lines.filter((l) => l.decision === 'APPROVED');
   const denied = evaluation.lines.filter((l) => l.decision === 'DENIED');
   const review = evaluation.lines.filter((l) => l.decision === 'ESCALATED');
+  const catalog = ruleCatalog(args.policy);
   const firstRuleText = (ids: string[]) =>
-    RULES[(ids.find((r) => RULES[r as RuleId]?.effect === 'DENIED') ?? ids[0]) as RuleId]?.customerText ?? 'it does not meet our refund policy';
+    catalog.get(ids.find((r) => catalog.get(r)?.effect === 'DENIED') ?? ids[0] ?? '')?.customerText ?? 'it does not meet our refund policy';
 
   const ctx: ReplyContext = {
     ...emptyCtx,
@@ -458,14 +468,15 @@ async function createCase(args: {
     approvedItems: decision === 'APPROVED' ? approved.map((l) => ({ name: l.name, amount: formatCents(l.amountCents) })) : [],
     deniedItems: denied.map((l) => ({ name: l.name, reason: firstRuleText(l.ruleIds) })),
     reviewItems: review.map((l) => ({ name: l.name })),
-    reasons: customerReasons(evaluation),
+    reasons: customerReasons(evaluation, catalog),
   };
   const allowed = [
     ...evaluation.lines.map((l) => l.amountCents),
     evaluation.refundAmountCents,
     evaluation.reviewAmountCents,
     order?.totalCents ?? 0,
-    POLICY.humanReviewThresholdCents,
+    args.policy.config.humanReviewThresholdCents,
+    ...amountsIn([...ctx.reasons, ...ctx.deniedItems.map((d) => d.reason)]),
   ];
   const { draft, provider: replyProvider } = await draftGuardedReply(trace, audit, ctx, allowed, conversationId);
 
@@ -494,7 +505,7 @@ async function createCase(args: {
       internalNote: draft.internalNote || null,
       aiProvider: replyProvider.name === args.aiProviderUsed.name ? replyProvider.name : `${args.aiProviderUsed.name}+${replyProvider.name}`,
       aiModel: args.aiProviderUsed.model,
-      policyVersion: `${POLICY.version} / ${PROMPT_VERSION}`,
+      policyVersion: `${args.policy.version} / ${PROMPT_VERSION}`,
       latencyMs,
     });
 
@@ -545,7 +556,7 @@ async function createCase(args: {
           type: `decision.${decision.toLowerCase()}`,
           severity: riskSeverity,
           detail: {
-            policyVersion: POLICY.version,
+            policyVersion: args.policy.version,
             requestedOrder: args.requestedOrderNumber ?? null,
             rules: evaluation.rules.map((r) => `${r.id}:${r.effect}`),
             refundAmountCents: evaluation.refundAmountCents,

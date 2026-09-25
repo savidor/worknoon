@@ -2,6 +2,7 @@ import type pg from 'pg';
 import { pool, withTransaction } from '../db/pool.js';
 import { DAY_MS } from '../lib/money.js';
 import { logger } from '../lib/logger.js';
+import { resetPolicies } from '../services/policy.service.js';
 import { SEED_CUSTOMERS } from './data.js';
 
 const ago = (now: number, days: number | undefined) => (days === undefined ? null : new Date(now - days * DAY_MS));
@@ -57,6 +58,8 @@ export async function reseed(): Promise<void> {
     await client.query(
       'TRUNCATE audit_events, messages, refund_requests, conversations, refunds, order_items, orders, customers CASCADE',
     );
+    // Demo reset also restores the original policy so every scenario behaves as documented.
+    await resetPolicies(client);
 
     for (const c of SEED_CUSTOMERS) {
       await client.query(

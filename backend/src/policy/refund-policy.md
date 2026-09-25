@@ -1,18 +1,18 @@
 # Refund Policy
 
-**Version 2026.09-r1** · Effective 1 September 2026
+**Version {{version}}** · Effective {{effectiveFrom}}
 
 This policy explains when orders are eligible for a refund. Requests made through our support chat are assessed automatically against these rules. Some requests are passed to a specialist for review, and you will always see the outcome in the same chat.
 
 ## 1. Refund window
 
-**1.1** Refund requests must be made within **30 days of delivery**. Requests made after that are not eligible.
+**1.1** Refund requests must be made within **{{refundWindowDays}} days of delivery**. Requests made after that are not eligible.
 
 ## 2. Items that cannot be refunded
 
 **2.1** Items marked **Final Sale** are not eligible for a refund.
 
-**2.2** **Gift cards and digital downloads** are not eligible for a refund.
+**2.2** Items in these categories are not eligible for a refund: **{{nonReturnableCategories}}**.
 
 **2.3** If a Final Sale item arrives **damaged or is not the item you ordered**, a specialist will review the request individually.
 
@@ -29,13 +29,13 @@ Refunds return to the original payment method within 5 to 7 business days. Parti
 
 ## 4. Human review
 
-**4.1** Refunds **above $500** are confirmed by a member of our team before they are issued. We aim to review within 1 business day.
+**4.1** Refunds **above {{threshold}}** are confirmed by a member of our team before they are issued. We aim to review within 1 business day.
 
 ## 5. Delivery issues
 
 **5.1** If your order is still in transit and within its expected delivery window, please wait for it to arrive. You can request a return once it is delivered.
 
-**5.2** If a parcel is **7 or more days past its expected delivery date**, a specialist opens an investigation with the carrier.
+**5.2** If a parcel is **{{lostParcelGraceDays}} or more days past its expected delivery date**, a specialist opens an investigation with the carrier.
 
 **5.3** If you report that an order did not arrive but the carrier confirmed delivery, a specialist will investigate with you before any decision is made.
 
@@ -55,7 +55,7 @@ To protect customers and keep refunds fast for everyone, some requests are revie
 
 **8.1** Requests about an order that is not on your account are declined.
 
-**8.2** Accounts with **3 or more refunds in the last 90 days** have new requests reviewed by a specialist.
+**8.2** Accounts with **{{frequencyMaxRefunds}} or more refunds in the last {{frequencyLookbackDays}} days** have new requests reviewed by a specialist.
 
 **8.3** Accounts with an open payment dispute or security review have requests reviewed by a specialist.
 
@@ -65,8 +65,8 @@ To protect customers and keep refunds fast for everyone, some requests are revie
 
 **8.6** If we cannot understand a request with enough confidence, a specialist reviews it so we get it right.
 
-**8.7** If a request is still unclear after two clarifying questions, a specialist picks it up so you do not have to repeat yourself.
+**8.7** If a request is still unclear after {{maxClarificationTurns}} clarifying questions, a specialist picks it up so you do not have to repeat yourself.
 
-## How decisions are combined
+{{customRules}}## How decisions are combined
 
 When more than one rule applies, the most restrictive outcome wins: **not eligible** takes precedence over **specialist review**, which takes precedence over **approved**. A review can never make an ineligible item eligible.

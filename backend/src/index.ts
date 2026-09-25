@@ -4,8 +4,8 @@ import { env } from './config/env.js';
 import { migrate } from './db/migrate.js';
 import { pool } from './db/pool.js';
 import { logger } from './lib/logger.js';
-import { POLICY } from './policy/policy.js';
 import { seedIfEmpty } from './seed/seed.js';
+import { ensureDefaultPolicy, getActivePolicy } from './services/policy.service.js';
 
 async function waitForDatabase(attempts = 30): Promise<void> {
   for (let i = 1; i <= attempts; i++) {
@@ -27,10 +27,12 @@ async function main() {
   await waitForDatabase();
   if (env.AUTO_MIGRATE) await migrate();
   if (env.SEED_ON_BOOT) await seedIfEmpty();
+  await ensureDefaultPolicy();
+  const policy = await getActivePolicy();
 
   const server = createApp().listen(env.PORT, () => {
     logger.info(
-      { port: env.PORT, ai: `${aiProvider.name}:${aiProvider.model}`, policy: POLICY.version, demoMode: env.DEMO_MODE },
+      { port: env.PORT, ai: `${aiProvider.name}:${aiProvider.model}`, policy: policy.version, demoMode: env.DEMO_MODE },
       'RefundDesk API ready',
     );
   });

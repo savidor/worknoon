@@ -4,19 +4,19 @@ import { aiProvider } from '../ai/index.js';
 import { env } from '../config/env.js';
 import { HttpError } from '../lib/errors.js';
 import { adminName, requireRole } from '../middleware/auth.js';
-import { POLICY } from '../policy/policy.js';
 import { eventsForRequest, securityEvents } from '../repositories/audit.repo.js';
 import { listMessages } from '../repositories/conversation.repo.js';
 import { getOrderById } from '../repositories/crm.repo.js';
 import { getRequest, getStats, listRequests } from '../repositories/request.repo.js';
 import { reseed } from '../seed/seed.js';
+import { getActivePolicy } from '../services/policy.service.js';
 import { reviewRequest } from '../services/review.service.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireRole('admin'));
 
-adminRouter.get('/system', (_req, res) => {
-  res.json({ ai: { provider: aiProvider.name, model: aiProvider.model }, policyVersion: POLICY.version, demoMode: env.DEMO_MODE });
+adminRouter.get('/system', async (_req, res) => {
+  res.json({ ai: { provider: aiProvider.name, model: aiProvider.model }, policyVersion: (await getActivePolicy()).version, demoMode: env.DEMO_MODE });
 });
 
 adminRouter.get('/stats', async (_req, res) => {

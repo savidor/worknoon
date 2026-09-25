@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
@@ -9,13 +6,12 @@ import { env } from '../config/env.js';
 import { pool } from '../db/pool.js';
 import { passwordMatches, signToken } from '../lib/auth.js';
 import { HttpError } from '../lib/errors.js';
-import { POLICY, RULES } from '../policy/policy.js';
+import { renderPolicyDocument } from '../policy/document.js';
+import { ruleCatalog } from '../policy/policy.js';
 import { getCustomer, listCustomers, listOrdersForCustomer } from '../repositories/crm.repo.js';
 import { SEED_CUSTOMERS } from '../seed/data.js';
+import { getActivePolicy } from '../services/policy.service.js';
 import { publicCustomer } from '../services/presenters.js';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const policyMarkdown = readFileSync(path.join(here, '../policy/refund-policy.md'), 'utf8');
 
 // Password attempts are tightly limited against brute force; demo sign-ins only switch personas.
 const adminLoginLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, skipSuccessfulRequests: true });
@@ -36,13 +32,19 @@ publicRouter.get('/health', async (_req, res) => {
     db,
     dbLatencyMs: Date.now() - t0,
     ai: { provider: aiProvider.name, model: aiProvider.model },
-    policyVersion: POLICY.version,
+    policyVersion: (await getActivePolicy()).version,
     demoMode: env.DEMO_MODE,
   });
 });
 
-publicRouter.get('/policy', (_req, res) => {
-  res.json({ version: POLICY.version, effectiveFrom: POLICY.effectiveFrom, markdown: policyMarkdown, config: POLICY, rules: Object.values(RULES) });
+/** The customer-facing policy, rendered from the active version so it always matches the engine. */
+publicRouter.get('/policy', async (_req, res) => {
+  const policy = await getActivePolicy();
+  res.json({
+    version: policy.version,
+    markdown: renderPolicyDocument(policy),
+    rules: [...ruleCatalog(policy).values()],
+  });
 });
 
 /** Demo only: lists synthetic customers with the scenario each one exercises. */

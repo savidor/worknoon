@@ -133,10 +133,75 @@ export interface Stats {
   reasons: Array<{ reason: string; count: number }>;
 }
 
+export type FieldType = 'enum' | 'string' | 'money' | 'number' | 'boolean';
+
+export interface PolicyConfig {
+  refundWindowDays: number;
+  humanReviewThresholdCents: number;
+  frequencyLookbackDays: number;
+  frequencyMaxRefunds: number;
+  lostParcelGraceDays: number;
+  minExtractionConfidence: number;
+  maxClarificationTurns: number;
+  nonReturnableCategories: string[];
+  riskAccountFlags: string[];
+}
+
+export interface Condition {
+  field: string;
+  operator: string;
+  value: string | number | string[] | null;
+}
+
+export interface CustomRule {
+  id?: string;
+  name: string;
+  enabled: boolean;
+  effect: 'DENIED' | 'ESCALATED';
+  conditions: Condition[];
+  customerText: string;
+}
+
+export interface PolicyDraft {
+  config: PolicyConfig;
+  customRules: CustomRule[];
+}
+
+export interface PolicyVersion extends PolicyDraft {
+  id: number;
+  version: string;
+  note: string;
+  createdBy: string;
+  createdAt: string;
+  isActive: boolean;
+}
+
+export interface PolicyStudioData {
+  active: PolicyDraft & { version: string };
+  versions: PolicyVersion[];
+  catalog: {
+    fields: Record<string, { label: string; type: FieldType; help: string; options?: string[] }>;
+    operators: Record<string, { label: string; types: FieldType[] }>;
+    reasons: string[];
+    knownCategories: string[];
+    knownFlags: string[];
+    orders: Array<{ order_number: string; status: string; customer_name: string; items: Array<{ sku: string; name: string }> }>;
+  };
+}
+
+export interface EvaluationView {
+  decision: Decision;
+  refundAmountCents: number;
+  reviewAmountCents: number;
+  lines: Array<{ itemId: string; sku: string; name: string; amountCents: number; decision: Decision; ruleIds: string[] }>;
+  rules: Array<{ id: string; effect: Decision | 'FLAG'; detail: string; title: string; custom: boolean; itemId?: string }>;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public details: Array<{ path: string; message: string }> = [],
   ) {
     super(message);
   }
@@ -176,7 +241,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401 && opts.role) tokens.set(opts.role, null);
-    throw new ApiError(res.status, json?.error?.message ?? `Request failed (${res.status})`);
+    throw new ApiError(res.status, json?.error?.message ?? `Request failed (${res.status})`, Array.isArray(json?.error?.details) ? json.error.details : []);
   }
   return json as T;
 }

@@ -9,7 +9,8 @@ import type {
   TriggeredRule,
 } from '../domain/types.js';
 import { daysBetween, formatCents } from '../lib/money.js';
-import { POLICY, RISK_RULES, RULES, type RuleId } from './policy.js';
+import { ruleMatches, type LineFacts } from './custom-rules.js';
+import { DEFAULT_POLICY, POLICY_CONSTANTS, RISK_RULES, ruleCatalog, type ActivePolicy, type RuleId } from './policy.js';
 
 export interface EvaluationInput {
   now: Date;
@@ -50,11 +51,17 @@ function lineAmount(item: OrderItem): number {
  *
  * Precedence: DENIED > ESCALATED > APPROVED. Risk rules can move an approval to human
  * review but can never turn a denial into an approval.
+ *
+ * The policy (thresholds and custom rules) is passed in, so the function stays pure and
+ * any past decision can be replayed exactly against the version that made it.
  */
-export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
+export function evaluateRefund(input: EvaluationInput, policy: ActivePolicy = DEFAULT_POLICY): PolicyEvaluation {
   const { now, customer, order, signals } = input;
+  const cfg = policy.config;
+  const catalog = ruleCatalog(policy);
+  const effectOf = (id: string) => catalog.get(id)?.effect ?? 'ESCALATED';
   const rules: TriggeredRule[] = [];
-  const trigger = (id: RuleId, detail: string, itemId?: string, effect = RULES[id].effect) => {
+  const trigger = (id: string, detail: string, itemId?: string, effect = effectOf(id)) => {
     rules.push({ id, effect, detail, ...(itemId && { itemId }) });
   };
 
@@ -73,9 +80,20 @@ export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
   const reason: ReasonCategory =
     input.reason === 'cancel_order' && order.status === 'delivered' ? 'changed_mind' : input.reason;
 
+  const deliveredAt = order.status === 'delivered' ? (order.deliveredAt ?? order.orderedAt) : null;
+  const baseFacts = {
+    'order.total': order.totalCents,
+    'order.status': order.status,
+    reason,
+    days_since_delivery: deliveredAt ? daysBetween(deliveredAt, now) : null,
+    'customer.tier': customer.tier,
+    'customer.tenure_days': daysBetween(customer.memberSince, now),
+    'customer.recent_refunds': signals.refundsInLookback,
+  };
+
   const lines: LineDecision[] = items.map((item) => {
-    const lineRules: RuleId[] = [];
-    const hit = (id: RuleId, detail: string) => {
+    const lineRules: string[] = [];
+    const hit = (id: string, detail: string) => {
       lineRules.push(id);
       trigger(id, detail, item.id);
     };
@@ -96,7 +114,7 @@ export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
       case 'shipped': {
         const expected = order.expectedDeliveryAt ?? now;
         const overdueDays = daysBetween(expected, now);
-        if (overdueDays >= POLICY.lostParcelGraceDays) {
+        if (overdueDays >= cfg.lostParcelGraceDays) {
           hit('LOST_PARCEL', `Parcel is ${overdueDays} days past its expected delivery date.`);
         } else {
           hit('IN_TRANSIT', `Parcel expected ${expected.toISOString().slice(0, 10)}; still in transit.`);
@@ -111,21 +129,21 @@ export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
         }
         const delivered = order.deliveredAt ?? order.orderedAt;
         const age = daysBetween(delivered, now);
-        if (age > POLICY.refundWindowDays) {
-          hit('OUTSIDE_WINDOW', `Delivered ${age} days ago; window is ${POLICY.refundWindowDays} days.`);
+        if (age > cfg.refundWindowDays) {
+          hit('OUTSIDE_WINDOW', `Delivered ${age} days ago; window is ${cfg.refundWindowDays} days.`);
         }
-        if (POLICY.nonReturnableCategories.includes(item.category)) {
+        if (cfg.nonReturnableCategories.includes(item.category)) {
           hit('NON_RETURNABLE_CATEGORY', `${item.name} is in non-refundable category "${item.category}".`);
         }
         if (item.finalSale) {
-          if (POLICY.merchantFaultReasons.includes(reason)) {
+          if (POLICY_CONSTANTS.merchantFaultReasons.includes(reason)) {
             hit('FINAL_SALE_MERCHANT_FAULT', `${item.name} is final sale but reported as ${reason}.`);
           } else {
             hit('FINAL_SALE', `${item.name} is final sale.`);
           }
         }
         if (lineRules.length === 0) {
-          if (POLICY.qualifyingReasons.includes(reason)) {
+          if (POLICY_CONSTANTS.qualifyingReasons.includes(reason)) {
             hit('QUALIFYING_REASON', `Delivered ${age} days ago with qualifying reason "${reason}".`);
           } else {
             hit('LOW_CONFIDENCE', `No qualifying reason could be established (got "${reason}").`);
@@ -135,12 +153,24 @@ export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
       }
     }
 
+    // Custom rules from the Policy Studio. They can only deny or escalate a line.
+    const facts: LineFacts = {
+      ...baseFacts,
+      'item.category': item.category,
+      'item.sku': item.sku,
+      'item.price': lineAmount(item),
+      'item.final_sale': item.finalSale,
+    };
+    for (const rule of policy.customRules) {
+      if (ruleMatches(rule, facts)) hit(rule.id, `Custom rule "${rule.name}" matched ${item.name}.`);
+    }
+
     return {
       itemId: item.id,
       sku: item.sku,
       name: item.name,
       amountCents: lineAmount(item),
-      decision: mostRestrictive(lineRules.map((id) => RULES[id].effect as Decision)),
+      decision: mostRestrictive(lineRules.map((id) => effectOf(id) as Decision)),
       ruleIds: lineRules,
     };
   });
@@ -164,19 +194,19 @@ export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
   };
 
   const payout = lines.filter((l) => l.decision !== 'DENIED').reduce((sum, l) => sum + l.amountCents, 0);
-  if (decision !== 'DENIED' && payout > POLICY.humanReviewThresholdCents) {
+  if (decision !== 'DENIED' && payout > cfg.humanReviewThresholdCents) {
     overlay(
       'HIGH_VALUE',
-      `Refund of ${formatCents(payout)} exceeds the ${formatCents(POLICY.humanReviewThresholdCents)} review threshold.`,
+      `Refund of ${formatCents(payout)} exceeds the ${formatCents(cfg.humanReviewThresholdCents)} review threshold.`,
     );
   }
-  if (signals.refundsInLookback >= POLICY.frequencyMaxRefunds) {
+  if (signals.refundsInLookback >= cfg.frequencyMaxRefunds) {
     overlay(
       'REFUND_FREQUENCY',
-      `${signals.refundsInLookback} refunds in the last ${POLICY.frequencyLookbackDays} days (limit ${POLICY.frequencyMaxRefunds - 1}).`,
+      `${signals.refundsInLookback} refunds in the last ${cfg.frequencyLookbackDays} days (limit ${cfg.frequencyMaxRefunds - 1}).`,
     );
   }
-  const riskyFlags = customer.accountFlags.filter((f) => POLICY.riskAccountFlags.includes(f));
+  const riskyFlags = customer.accountFlags.filter((f) => cfg.riskAccountFlags.includes(f));
   if (riskyFlags.length > 0) {
     overlay('ACCOUNT_FLAG', `Account flags: ${riskyFlags.join(', ')}.`);
   }
@@ -186,10 +216,10 @@ export function evaluateRefund(input: EvaluationInput): PolicyEvaluation {
   if (signals.manipulationSignals.length > 0) {
     overlay('MANIPULATION_ATTEMPT', `Signals: ${signals.manipulationSignals.join('; ')}.`);
   }
-  if (signals.confidence < POLICY.minExtractionConfidence) {
+  if (signals.confidence < cfg.minExtractionConfidence) {
     overlay(
       'LOW_CONFIDENCE',
-      `Extraction confidence ${signals.confidence.toFixed(2)} is below ${POLICY.minExtractionConfidence}.`,
+      `Extraction confidence ${signals.confidence.toFixed(2)} is below ${cfg.minExtractionConfidence}.`,
     );
   }
 

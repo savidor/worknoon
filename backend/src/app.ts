@@ -8,6 +8,7 @@ import { logger } from './lib/logger.js';
 import { errorHandler, notFound } from './middleware/errors.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { customerRouter } from './routes/customer.routes.js';
+import { policyRouter } from './routes/policy.routes.js';
 import { publicRouter } from './routes/public.routes.js';
 
 export function createApp() {
@@ -31,6 +32,7 @@ export function createApp() {
   app.use(express.json({ limit: '16kb' }));
 
   app.use('/api', publicRouter);
+  app.use('/api/admin/policy', policyRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api', customerRouter);
 

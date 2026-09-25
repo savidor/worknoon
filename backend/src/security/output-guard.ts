@@ -24,6 +24,11 @@ const RULE_ID = /\b[A-Z]{3,}_[A-Z_]{3,}\b/;
 const MARKUP = /<\/?\s*(customer_message|system|assistant|context)[^>]*>/i;
 const MONEY = /\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/g;
 
+/** True when text mentions risk signals, internal machinery or rule ids a customer must never see. */
+export function containsInternalTerms(text: string): boolean {
+  return INTERNAL.test(text) || RULE_ID.test(text);
+}
+
 /**
  * Validates a model-written customer reply against the decision that was actually made.
  * The model writes the words, but it can never contradict the policy engine, promise an
@@ -39,7 +44,7 @@ export function guardReply(reply: string, ctx: GuardContext): GuardResult {
   if (ctx.outcome === 'APPROVED' && !ctx.partial && DENIAL.test(reply)) {
     violations.push('denies_an_approved_refund');
   }
-  if (INTERNAL.test(reply) || RULE_ID.test(reply)) violations.push('leaks_internal_terms');
+  if (containsInternalTerms(reply)) violations.push('leaks_internal_terms');
   if (MARKUP.test(reply)) violations.push('contains_prompt_markup');
 
   const allowed = new Set(ctx.allowedAmountsCents.map((c) => Math.round(c)));

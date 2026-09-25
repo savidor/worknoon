@@ -1,6 +1,6 @@
 import { CheckCircle2, CircleHelp, Info, Loader2, ShieldAlert, UserRoundSearch, XCircle } from 'lucide-react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import type { Outcome } from '../api/client';
+import { ApiError, type Outcome } from '../api/client';
 import { cx } from '../lib/format';
 
 export const OUTCOME_STYLE: Record<Outcome, { label: string; className: string; icon: typeof CheckCircle2 }> = {
@@ -97,11 +97,32 @@ export function Spinner({ label = 'Loading' }: { label?: string }) {
   );
 }
 
+/** Turns validation paths such as draft.customRules.0.conditions.1 into "Rule 1, condition 2". */
+function friendlyPath(path: string): string {
+  const rule = path.match(/customRules\.(\d+)/);
+  const cond = path.match(/conditions\.(\d+)/);
+  const field = (path.split('.').pop() ?? path).replace(/([A-Z])/g, ' $1').toLowerCase();
+  if (rule) return [`Rule ${Number(rule[1]) + 1}`, cond ? `condition ${Number(cond[1]) + 1}` : field !== rule[1] ? field : ''].filter(Boolean).join(', ');
+  // Threshold messages already name the setting.
+  return '';
+}
+
 export function ErrorNote({ error }: { error: unknown }) {
   if (!error) return null;
+  const details = error instanceof ApiError ? error.details : [];
   return (
     <div role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-inset ring-rose-600/20">
       {error instanceof Error ? error.message : 'Something went wrong'}
+      {details.length > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
+          {details.map((d, i) => (
+            <li key={i}>
+              {friendlyPath(d.path) && <span className="font-medium">{friendlyPath(d.path)}: </span>}
+              {d.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

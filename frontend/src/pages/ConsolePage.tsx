@@ -1,10 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Clock, DatabaseZap, LogOut, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
-import { api, ApiError, tokens, type Decision, type RequestSummary, type Stats } from '../api/client';
+import { useEffect, useState } from 'react';
+import { api, ApiError, type Decision, type RequestSummary, type Stats } from '../api/client';
+import { AdminGate, ConsoleTabs } from '../components/AdminGate';
 import { CaseDrawer } from '../components/CaseDrawer';
 import { DecisionsChart } from '../components/DecisionsChart';
-import { Button, Card, ErrorNote, FlagBadge, OutcomeBadge, Pill, Spinner } from '../components/ui';
+import { Button, Card, FlagBadge, OutcomeBadge, Pill, Spinner } from '../components/ui';
 import { cx, humanize, money, relative } from '../lib/format';
 
 type Filter = 'all' | Decision | 'flagged';
@@ -18,57 +19,7 @@ const FILTERS: Array<{ id: Filter; label: string }> = [
 ];
 
 export function ConsolePage() {
-  const [authed, setAuthed] = useState(() => !!tokens.get('admin'));
-  if (!authed) return <AdminLogin onDone={() => setAuthed(true)} />;
-  return (
-    <Console
-      onLogout={() => {
-        tokens.set('admin', null);
-        setAuthed(false);
-      }}
-    />
-  );
-}
-
-function AdminLogin({ onDone }: { onDone: () => void }) {
-  const [username, setUsername] = useState('reviewer');
-  const [password, setPassword] = useState('');
-  const login = useMutation({
-    mutationFn: () => api<{ token: string }>('/auth/admin/login', { method: 'POST', body: { username, password } }),
-    onSuccess: (r) => {
-      tokens.set('admin', r.token);
-      onDone();
-    },
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    login.mutate();
-  };
-  return (
-    <div className="mx-auto mt-16 max-w-sm">
-      <Card>
-        <form onSubmit={submit} className="space-y-4 p-6">
-          <div>
-            <h1 className="text-lg font-semibold">Support console</h1>
-            <p className="text-sm text-slate-500">Sign in to review refund decisions.</p>
-          </div>
-          <label className="block text-sm">
-            <span className="text-slate-600">Name</span>
-            <input className="mt-1 w-full rounded-lg px-3 py-2 ring-1 ring-slate-300 outline-none focus:ring-2 focus:ring-brand-500" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
-          </label>
-          <label className="block text-sm">
-            <span className="text-slate-600">Password</span>
-            <input type="password" className="mt-1 w-full rounded-lg px-3 py-2 ring-1 ring-slate-300 outline-none focus:ring-2 focus:ring-brand-500" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus />
-          </label>
-          <ErrorNote error={login.error} />
-          <Button type="submit" className="w-full" loading={login.isPending}>
-            Sign in
-          </Button>
-          <p className="text-center text-xs text-slate-400">Demo password: set by ADMIN_PASSWORD (default in README)</p>
-        </form>
-      </Card>
-    </div>
-  );
+  return <AdminGate>{(logout) => <Console onLogout={logout} />}</AdminGate>;
 }
 
 function Console({ onLogout }: { onLogout: () => void }) {
@@ -116,6 +67,7 @@ function Console({ onLogout }: { onLogout: () => void }) {
           <h1 className="text-lg font-semibold">Support console</h1>
           <p className="text-sm text-slate-500">Every decision, the reasoning behind it, and a queue for the cases that need a person.</p>
         </div>
+        <ConsoleTabs />
         <div className="ml-auto flex gap-2">
           <Button
             variant="secondary"

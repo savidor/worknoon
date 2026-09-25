@@ -6,7 +6,7 @@ import { Card, ErrorNote, Pill, Spinner } from '../components/ui';
 interface PolicyResponse {
   version: string;
   markdown: string;
-  rules: Array<{ id: string; section: string; title: string; effect: string }>;
+  rules: Array<{ id: string; section: string; title: string; effect: string; custom?: boolean }>;
 }
 
 const EFFECT_TONE = { APPROVED: 'emerald', DENIED: 'rose', ESCALATED: 'amber' } as const;
@@ -34,6 +34,7 @@ export function PolicyPage() {
               <span className="min-w-0 flex-1">
                 <span className="block text-slate-800">{r.title}</span>
                 <span className="font-mono text-[11px] text-slate-400">{r.id}</span>
+                {r.custom && <span className="ml-1.5"><Pill tone="brand">custom</Pill></span>}
               </span>
               <Pill tone={EFFECT_TONE[r.effect as keyof typeof EFFECT_TONE] ?? 'slate'}>{r.effect.toLowerCase()}</Pill>
             </li>

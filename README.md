@@ -2,7 +2,7 @@
 
 **AI-assisted refund decisions for e-commerce support, built so the AI can never overrule the refund policy.**
 
-Customers describe their problem in a chat. An LLM turns the message into structured facts and writes the reply. A deterministic, versioned policy engine makes the actual decision from database records: **Approved**, **Denied**, or **Escalated** to a human. Support staff get a console with every decision, the reasoning behind it, a full pipeline trace, a security log, and a review queue for escalated cases.
+Customers describe their problem in a chat. An LLM turns the message into structured facts and writes the reply. A deterministic, versioned policy engine makes the actual decision from database records: **Approved**, **Denied**, or **Escalated** to a human. Support staff get a console with every decision, the reasoning behind it, a full pipeline trace, a security log, and a review queue for escalated cases. Policy owners change thresholds and add rules in a **Policy Studio**, test the change against real orders and past cases, and publish it as a new version without a deploy.
 
 ![Customer chat with a partial refund](docs/screenshots/chat-partial-refund.png)
 
@@ -17,6 +17,7 @@ Customers describe their problem in a chat. An LLM turns the message into struct
 - [How the AI integration works](#how-the-ai-integration-works)
 - [Security and prompt injection](#security-and-prompt-injection)
 - [Support console](#support-console)
+- [Policy Studio](#policy-studio)
 - [API](#api)
 - [Testing](#testing)
 - [Assumptions and trade-offs](#assumptions-and-trade-offs)
@@ -40,6 +41,7 @@ Then open **http://localhost:8080**.
 | --- | --- |
 | Customer chat | http://localhost:8080 |
 | Support console | http://localhost:8080/console (password `worknoon-admin`, any name) |
+| Policy Studio | http://localhost:8080/console/policy |
 | Refund policy | http://localhost:8080/policy |
 | API health | http://localhost:4000/api/health |
 
@@ -169,7 +171,7 @@ Every stage is timed and stored as a **trace** on the case, visible in the conso
 | Layer | Location | Responsibility |
 | --- | --- | --- |
 | Policy engine | `backend/src/policy/engine.ts` | Pure function. Decides refunds. No I/O, no AI, fully unit tested. |
-| Policy definition | `backend/src/policy/policy.ts` + `refund-policy.md` | Versioned thresholds and rules. A test fails if the document and the code drift apart. |
+| Policy definition | `backend/src/policy/` | Built-in rules, the custom rule model, validation, and the policy document template. Published versions live in the `policy_versions` table. |
 | AI layer | `backend/src/ai/` | Provider interface, prompts, schemas, Gemini and offline adapters. |
 | Security | `backend/src/security/` | Input sanitizer, injection scanner, output guard. |
 | Orchestration | `backend/src/services/refund-pipeline.ts` | Wires the stages, handles fallbacks, owns the transaction. |
@@ -179,7 +181,7 @@ Every stage is timed and stored as a **trace** on the case, visible in the conso
 
 ### Data model
 
-`customers`, `orders`, `order_items` (the mock CRM) · `refunds` (money ledger) · `conversations`, `messages` (chat) · `refund_requests` (one row per decided case, with line decisions, rules, extraction, trace, reply) · `audit_events` (append-only log of AI steps, decisions, security events and human actions). Money is stored as integer cents. Schema: [`backend/src/db/migrations/001_init.sql`](backend/src/db/migrations/001_init.sql).
+`customers`, `orders`, `order_items` (the mock CRM) · `refunds` (money ledger) · `policy_versions` (immutable published policies, exactly one active) · `conversations`, `messages` (chat) · `refund_requests` (one row per decided case, with line decisions, rules, extraction, trace, reply) · `audit_events` (append-only log of AI steps, decisions, security events and human actions). Money is stored as integer cents. Schema: [`backend/src/db/migrations/001_init.sql`](backend/src/db/migrations/001_init.sql).
 
 ---
 
@@ -218,6 +220,8 @@ This is where the AI adds real value: it resolves "the arm" to the right SKU in 
 - **Risk overlays** (escalate an approval, flag a denial): 3+ refunds in 90 days, risky account flags, claims that conflict with records, manipulation attempts, low extraction confidence, request still unclear after two clarifying questions.
 
 Precedence is **Denied > Escalated > Approved**. Nothing, including anything the AI outputs, can turn a denial into an approval. Each rule maps to a numbered clause in the published policy, and every decision stores the policy version and prompt version that produced it.
+
+The engine takes the active policy as a parameter (thresholds plus custom rules), so it stays a pure function and any past decision can be replayed against the version that made it.
 
 ### Provider abstraction and resilience
 
@@ -265,6 +269,19 @@ Customer-facing replies never reveal that anything was detected. The attacker se
 - **Human review**: approve or deny an escalated case with a required internal note and an optional message to the customer. Approval re-checks item state inside a locked transaction, writes to the refund ledger, and posts an update into the customer's chat.
 - **Security log**: manipulation attempts, cross-account access, and blocked replies.
 
+## Policy Studio
+
+![Policy Studio](docs/screenshots/policy-studio.png)
+
+Policy owners change the refund policy from the console, without a code change or deploy.
+
+- **Thresholds**: refund window, review threshold, frequency limit and lookback, lost-parcel delay, clarifying questions, minimum AI confidence, non-refundable categories, and account flags that need review. Changed values are highlighted against the active version.
+- **Custom rules**: "if *all* of these conditions hold, then *not eligible* or *send to a specialist*", built from a fixed catalogue of fields (item category, price, final sale, order total and status, refund reason, days since delivery, customer tier, tenure, recent refunds) and type-appropriate operators. A plain-English sentence previews each rule as you build it.
+- **Test before publishing**: run any order through the active policy and the draft side by side, or replay up to 100 recent cases (each at the time it was decided) to see how many decisions the change would alter.
+- **Publish and roll back**: each publish creates an immutable version (`2026.09-r2`, `r3`, ...) with author, note and a change summary in the audit log. Any earlier version can be restored in one step. The customer-facing policy page is rendered from the active version, so it always matches what the engine enforces.
+
+**Guardrails.** Custom rules can only deny or escalate, never approve, so they cannot weaken the built-in protections (final sale, refund window, identity and fraud checks). Conditions are compared, never executed. Thresholds have sane ranges. Customer wording is checked so it cannot mention fraud, flags, rule ids or markup. The database enforces a single active version, publishes are serialised with an advisory lock, and only admins can publish.
+
 ## API
 
 All routes are under `/api`. Customer routes need a customer token; admin routes need an admin token.
@@ -286,7 +303,13 @@ All routes are under `/api`. Customer routes need a customer token; admin routes
 | GET | `/admin/requests/:id` | admin | Case detail, audit events, transcript, order |
 | POST | `/admin/requests/:id/review` | admin | Approve or deny an escalated case |
 | GET | `/admin/security-events` | admin | Security log |
-| POST | `/admin/demo/reset` | admin (demo mode) | Reseed all data |
+| GET | `/admin/policy` | admin | Active policy, version history, rule catalogue, orders for testing |
+| POST | `/admin/policy/simulate` | admin | Run one order through the active policy and a draft |
+| POST | `/admin/policy/impact` | admin | Replay recent cases through the active policy and a draft |
+| POST | `/admin/policy/preview` | admin | The policy page as it would read after publishing |
+| POST | `/admin/policy/publish` | admin | Publish a draft as a new active version |
+| POST | `/admin/policy/versions/:id/activate` | admin | Restore an earlier version |
+| POST | `/admin/demo/reset` | admin (demo mode) | Reseed all data and restore the original policy |
 
 Errors use one shape: `{ "error": { "code", "message", "details?" } }`. Every response carries an `x-request-id` that also appears in the logs.
 
@@ -301,8 +324,8 @@ docker compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **67 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, and a test that fails if `refund-policy.md` disagrees with the engine's thresholds.
-- **33 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, and the specialist update reaching the customer. CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
+- **91 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), and tests that the rendered policy page matches the engine for any version.
+- **44 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
 The model path was also tested against a stubbed model that deliberately returns a policy-violating reply (a false approval with an invented amount) to confirm the output guard blocks it and logs `security.reply_blocked`, and against model failures to confirm the fallback path.
@@ -313,6 +336,8 @@ The model path was also tested against a stubbed model that deliberately returns
 
 - **Authentication is simulated.** The demo sign-in stands in for the store's real customer login, and the console uses one shared password with the reviewer's name recorded on each decision. The important property holds: the API derives identity only from a signed token. Tokens live in `sessionStorage` for simplicity; production would use httpOnly cookies.
 - **The engine decides, not the model.** This gives up some flexibility (the model cannot grant a goodwill exception) in exchange for auditability, determinism and resistance to manipulation. Exceptions go to humans, which is where they belong.
+- **Custom rules only tighten.** Loosening the policy happens through thresholds with sane ranges, never through a rule that approves. That keeps every built-in protection intact whatever an editor does.
+- **Impact replay uses today's order data**, adjusted so items refunded by the replayed case count as unrefunded, and evaluates each case at the time it was decided. It is a strong guide, not an exact reconstruction of past state.
 - **Escalate rather than guess.** Ambiguity, low confidence, conflicting claims and manipulation all route to a person. That lowers the automation rate a little and removes a class of costly mistakes.
 - **Item-level refunds, whole quantities.** A line is refunded in full. Partial quantities would be a small extension.
 - **"Change of mind" relies on the customer's statement** that an item is unused. In production the refund would be issued on receipt of the return.
@@ -329,7 +354,7 @@ The model path was also tested against a stubbed model that deliberately returns
 - An evaluation set of real, anonymised requests to measure extraction accuracy per model and prompt version before rollout.
 - Photo upload for damage claims, analysed by a vision model as extra evidence for reviewers.
 - Streaming replies, websockets for live updates, and OpenTelemetry tracing across the pipeline.
-- Policy rules managed as data with approval workflow and effective dates, instead of code.
+- A four-eyes approval step and scheduled effective dates for policy publishes, and richer rule logic (OR groups) if policy owners need it.
 - PII redaction in logs and a data retention policy for conversations.
 
 ## Project structure
@@ -343,7 +368,7 @@ The model path was also tested against a stubbed model that deliberately returns
 ├── backend/
 │   ├── src/
 │   │   ├── ai/                 # provider interface, prompts, schemas, adapters, templates
-│   │   ├── policy/             # engine.ts, policy.ts, refund-policy.md
+│   │   ├── policy/             # engine, built-in rules, custom rules, validation, policy template
 │   │   ├── security/           # input sanitizer + injection scan, output guard
 │   │   ├── services/           # refund pipeline, human review
 │   │   ├── repositories/       # SQL
@@ -354,8 +379,8 @@ The model path was also tested against a stubbed model that deliberately returns
 └── frontend/
     ├── nginx.conf              # static hosting + /api proxy
     └── src/
-        ├── pages/              # ChatPage, ConsolePage, PolicyPage
-        └── components/         # CaseDrawer, DecisionsChart, UI primitives
+        ├── pages/              # ChatPage, ConsolePage, PolicyStudioPage, PolicyPage
+        └── components/         # CaseDrawer, DecisionsChart, policy/ editors, UI primitives
 ```
 
 ### Local development without Docker
