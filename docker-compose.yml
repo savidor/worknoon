@@ -1,10 +1,8 @@
-# One command to run everything:  docker compose up --build
+# One command to run everything:  docker-compose up   (or: docker compose up)
 # Open http://localhost:8080  (customer chat, support console, policy)
 #
 # The AI key is optional. Without it, the app runs in offline mode (heuristic
 # extraction + template replies). Put GEMINI_API_KEY in a .env file next to this file.
-
-name: refund-desk
 
 services:
   db:

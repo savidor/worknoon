@@ -28,12 +28,14 @@ Customers describe their problem in a chat. An LLM turns the message into struct
 
 ## Quick start
 
-Requirements: Docker with Compose v2.
+Requirements: Docker Desktop, or Docker Engine with Compose. Nothing else needs installing.
 
 ```bash
 git clone <this-repo> refund-desk && cd refund-desk
-docker compose up --build
+docker-compose up
 ```
+
+`docker compose up` (Compose v2 syntax) works the same. The first run builds the images, which takes a few minutes; add `--build` on later runs if you change the code.
 
 Then open **http://localhost:8080**.
 
@@ -62,7 +64,7 @@ cp .env.example .env
 GEMINI_API_KEY=your-key
 ```
 
-3. Restart with `docker compose up --build`. The header badge changes from *offline mode* to the active model.
+3. Stop the app (Ctrl+C) and run `docker-compose up` again; Compose recreates the backend with the new settings. The header badge changes from *offline mode* to the active model.
 
 **Free tier limits.** Gemini's free tier is small: about 5 requests per minute and 20 per day for each model, and each chat message uses two (understand, then reply). RefundDesk spreads load across a chain of four models, each with its own quota, and pauses any model that hits a limit (for an hour when the daily quota is spent). Sending messages about 20 seconds apart keeps replies on the model; beyond the quota, the offline provider answers instantly. Decisions are identical either way; only the wording is plainer, and the case trace shows which path answered. Daily quotas reset at midnight Pacific time.
 
@@ -89,6 +91,7 @@ The seed data has **15 customers**, each built to exercise a specific policy pat
 | James Carter | Jacket delivered 46 days ago | Denied (30-day window) |
 | Sofia Martinez | Final sale dress, changed mind | Denied |
 | Liam Chen | Defective $1,299 laptop | Escalated (over $500) |
+| Liam Chen | Asks about an "HP laptop" he never bought (he owns a ZenBook) | Asks which item he means; escalates, flagged, if he insists |
 | Priya Sharma | Wrong colour sneakers | Approved |
 | Noah Williams | Valid claim, 4 refunds in 90 days | Escalated |
 | Chloe Dubois | "Not received", still in transit | Denied, with guidance |
@@ -182,7 +185,7 @@ Every stage is timed and stored as a **trace** on the case, visible in the conso
 
 ### Data model
 
-`customers`, `orders`, `order_items` (the mock CRM) · `refunds` (money ledger) · `policy_versions` (immutable published policies, exactly one active) · `conversations`, `messages` (chat) · `refund_requests` (one row per decided case, with line decisions, rules, extraction, trace, reply) · `audit_events` (append-only log of AI steps, decisions, security events and human actions). Money is stored as integer cents. Schema: [`backend/src/db/migrations/001_init.sql`](backend/src/db/migrations/001_init.sql).
+`customers`, `orders`, `order_items` (the mock CRM) · `refunds` (money ledger) · `policy_versions` (immutable published policies, exactly one active) · `conversations`, `messages` (chat) · `refund_requests` (one row per decided case, with line decisions, rules, extraction, trace, reply) · `audit_events` (append-only log of AI steps, decisions, security events and human actions). Money is stored as integer cents. Schema: [`backend/src/db/migrations/`](backend/src/db/migrations/) (`001_init.sql`, `002_policy_versions.sql`), applied automatically on startup.
 
 ---
 
@@ -216,9 +219,12 @@ This is where the AI adds real value: it resolves "the arm" to the right SKU in 
 
 `evaluateRefund()` is a pure function over `(customer, order, reason, requested items, risk signals)`. It evaluates **each item separately** (so a mixed order can be partially refunded), then applies case-level overlays:
 
-- **Hard rules** (deny): outside 30 days, final sale, gift cards and digital, already refunded, order not on your account, cancelled order, still in transit.
-- **Review rules** (escalate): refund over $500, final sale item reported damaged, overdue parcel, delivered-but-not-received conflict.
-- **Risk overlays** (escalate an approval, flag a denial): 3+ refunds in 90 days, risky account flags, claims that conflict with records, manipulation attempts, low extraction confidence, request still unclear after two clarifying questions.
+- **Hard rules** (deny): outside the refund window (30 days by default), final sale, non-refundable categories such as gift cards and digital downloads, already refunded, order not on your account, cancelled order, still in transit.
+- **Review rules** (escalate): refund over the review threshold ($500 by default), final sale item reported damaged, overdue parcel, delivered-but-not-received conflict.
+- **Risk overlays** (escalate an approval, flag a denial): frequent refunds (3 or more in 90 days by default), risky account flags, claims that conflict with records, manipulation attempts, low extraction confidence, request still unclear after two clarifying questions.
+- **Custom rules** published from the Policy Studio, which can deny or escalate but never approve.
+
+The default thresholds are the ones in the brief; policy owners can change them in the Policy Studio.
 
 Precedence is **Denied > Escalated > Approved**. Nothing, including anything the AI outputs, can turn a denial into an approval. Each rule maps to a numbered clause in the published policy, and every decision stores the policy version and prompt version that produced it.
 
@@ -228,7 +234,7 @@ The engine takes the active policy as a parameter (thresholds plus custom rules)
 
 `AiProvider` has two methods, `extract` and `draftReply`, and two implementations that share the same prompts and schemas:
 
-- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), each attempt has an 8 second budget, and if the model fails while reading a message, the reply for that message comes straight from a template instead of waiting on the model again, and a per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent) so customers never wait on a model that is known to be down. The case trace records which model answered.
+- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), and each attempt has an 8 second budget. A per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent), so customers never wait on a model that is known to be down. If the model fails while reading a message, the reply for that message comes straight from a template rather than waiting on the model a second time; with the model fully down, a customer still gets a correct answer in about 2 seconds. The case trace records which model answered.
 - **Offline**: keyword heuristics and templates. It is the default when no key is set, and the **automatic fallback** when the model times out, errors, is blocked, or returns unparseable output. The fallback is recorded in the case trace, so degraded decisions stay visible.
 
 The customer is never left without an answer, and the decision is identical either way, because it never depended on the model. The interface also keeps the model swappable: moving to another vendor means one new adapter, with no change to the pipeline, engine, or security layers.
@@ -292,7 +298,7 @@ All routes are under `/api`. Customer routes need a customer token; admin routes
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/health` | none | DB and AI provider status |
-| GET | `/policy` | none | Policy document, config and rules |
+| GET | `/policy` | none | The policy page rendered from the active version, plus every rule |
 | GET | `/demo/customers` | none (demo mode) | Demo personas and scenarios |
 | POST | `/auth/customer/demo-login` | none (demo mode) | Stand-in for store login |
 | POST | `/auth/admin/login` | none | Support console login |
@@ -303,7 +309,7 @@ All routes are under `/api`. Customer routes need a customer token; admin routes
 | POST | `/conversations/:id/messages` | customer | **Send a message and run the pipeline** |
 | GET | `/admin/stats` | admin | Dashboard metrics |
 | GET | `/admin/requests` | admin | Cases, with `status`, `flagged`, `q`, `limit`, `offset` |
-| GET | `/admin/requests/:id` | admin | Case detail, audit events, transcript, order |
+| GET | `/admin/requests/:id` | admin | Case detail with plain-language rule guidance, highlighted evidence, refund history, audit events, transcript and order |
 | POST | `/admin/requests/:id/review` | admin | Approve or deny an escalated case |
 | GET | `/admin/security-events` | admin | Security log |
 | GET | `/admin/policy` | admin | Active policy, version history, rule catalogue, orders for testing |
@@ -323,12 +329,13 @@ Errors use one shape: `{ "error": { "code", "message", "details?" } }`. Every re
 cd backend && npm ci && npm test
 
 # End-to-end: every scenario, access control and the review flow, over HTTP
-docker compose up -d --build --wait
+# (the suite resets the demo data as it runs)
+docker-compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **91 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), and tests that the rendered policy page matches the engine for any version.
-- **46 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, greetings answered without volunteering order details, refund history behind the frequency rule, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
+- **94 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), brand-aware detection of items the customer does not own, the evidence recorded for security signals, and tests that the rendered policy page matches the engine for any version.
+- **52 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, greetings answered without volunteering order details, items the customer does not own (ask, accept a correction, escalate if they insist), refund history behind the frequency rule, the populated sample week, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
 The model path was also tested against a stubbed model that deliberately returns a policy-violating reply (a false approval with an invented amount) to confirm the output guard blocks it and logs `security.reply_blocked`, and against model failures to confirm the fallback path.
@@ -373,11 +380,11 @@ The model path was also tested against a stubbed model that deliberately returns
 │   │   ├── ai/                 # provider interface, prompts, schemas, adapters, templates
 │   │   ├── policy/             # engine, built-in rules, custom rules, validation, policy template
 │   │   ├── security/           # input sanitizer + injection scan, output guard
-│   │   ├── services/           # refund pipeline, human review
+│   │   ├── services/           # refund pipeline, human review, policy versions
 │   │   ├── repositories/       # SQL
 │   │   ├── routes/ middleware/ # HTTP layer
 │   │   ├── db/                 # pool, migrator, migrations
-│   │   └── seed/               # 15 synthetic customers and their scenarios
+│   │   └── seed/               # 15 demo personas, plus a week of sample activity
 │   └── tests/                  # vitest unit tests
 └── frontend/
     ├── nginx.conf              # static hosting + /api proxy
