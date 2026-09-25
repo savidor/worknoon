@@ -31,7 +31,7 @@ Customers describe their problem in a chat. An LLM turns the message into struct
 Requirements: Docker Desktop, or Docker Engine with Compose. Nothing else needs installing.
 
 ```bash
-git clone <this-repo> refund-desk && cd refund-desk
+git clone https://github.com/savidor/worknoon.git && cd worknoon
 docker-compose up
 ```
 
