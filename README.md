@@ -273,13 +273,22 @@ Customer-facing replies never reveal that anything was detected. The attacker se
 
 ![Support console](docs/screenshots/support-console.png)
 
-- **KPIs**: cases, automatic resolution rate, review queue and money on hold, amount refunded by RefundDesk decisions (historical refunds from before RefundDesk are not counted as its output), flagged cases, average decision time.
-- **Decisions over 7 days**, split by outcome.
-- **Request queue** with filters (needs review, approved, denied, flagged) and search by reference, customer or order.
+- **Opens with an answer, not a grid**: a greeting and one sentence on where things stand ("4 cases are waiting for you, $1,985.00 in total").
+- **Refunded to customers**: the total refunded by RefundDesk decisions (refunds from before RefundDesk are not counted), a daily trend, the change against the previous period, and the split between automatic and team approvals.
+- **Three shortcut tiles**: waiting for you (with money on hold), handled on its own, and flagged. Each one opens the table on the matching cases.
+- **Daily activity** for 7, 30 or 90 days, split into approved, sent to a person, and denied.
+- **Cases table**:
+  - Views (all, needs review, approved, denied, flagged) with live counts, plus search across reference, customer, order and message, with matches highlighted.
+  - Filters for reason, risk signal, who decided, date and amount. Each menu shows how many cases every option would return under the other active filters.
+  - Sortable columns, a column picker, compact rows, page size and paging.
+  - Row selection and CSV export of the current view or the selected rows. Exported cells are protected against spreadsheet formula injection.
+  - Keyboard use: `/` searches, arrow keys move between rows, Enter opens a case, X selects it.
+  - The whole view lives in the URL, so a filtered view survives a refresh and can be shared as a link.
+  - Filtering, sorting and paging run in Postgres with parameterised queries and a whitelist of sortable columns.
 - **Case detail**: the customer's message, what the AI understood (with confidence), the customer's refund history from the ledger (including refunds made before RefundDesk, and how many fall inside the frequency lookback), per-item decisions, every triggered rule with its explanation, the reply that was sent, the AI's note for the reviewer, the timed pipeline trace, the audit trail, and the full conversation.
 - **Written for non-technical reviewers**: every escalation says in plain words why the case needs a person and what to check (for example "Refunds above $500 always need a person to confirm. What to check: confirm the problem is genuine, for example by asking for photos"). Manipulation attempts are explained in plain English ("Included hidden code that pretends to be an instruction from our system") with the exact words highlighted in the customer's message. Rule codes stay available under "Technical detail".
 - **Human review**: approve or deny an escalated case with a required internal note and an optional message to the customer. Approval re-checks item state inside a locked transaction, writes to the refund ledger, and posts an update into the customer's chat.
-- **Security log**: manipulation attempts, cross-account access, and blocked replies.
+- **Security watch**: manipulation attempts, requests for another customer's order, claims about items never bought, and blocked replies, each described in plain words.
 
 ## Policy Studio
 
@@ -310,8 +319,9 @@ All routes are under `/api`. Customer routes need a customer token; admin routes
 | GET | `/conversations/current` | customer | Resume the latest conversation |
 | GET | `/conversations/:id/messages` | customer | Messages (owner only) |
 | POST | `/conversations/:id/messages` | customer | **Send a message and run the pipeline** |
-| GET | `/admin/stats` | admin | Dashboard metrics |
-| GET | `/admin/requests` | admin | Cases, with `status`, `flagged`, `q`, `limit`, `offset` |
+| GET | `/admin/stats` | admin | Dashboard metrics; `days` = 7, 30 or 90 |
+| GET | `/admin/requests` | admin | Cases with facet counts; filters `status`, `flagged`, `q`, `reasons`, `signals`, `decidedBy`, `sinceDays`, `minCents`, `maxCents`; `sort`, `dir`, `limit`, `offset` |
+| GET | `/admin/requests/export` | admin | The same filters as CSV, or chosen cases with `ids` |
 | GET | `/admin/requests/:id` | admin | Case detail with plain-language rule guidance, highlighted evidence, refund history, audit events, transcript and order |
 | POST | `/admin/requests/:id/review` | admin | Approve or deny an escalated case |
 | GET | `/admin/security-events` | admin | Security log |
@@ -337,8 +347,8 @@ docker-compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **97 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), brand-aware detection of items the customer does not own, the evidence recorded for security signals, and tests that the rendered policy page matches the engine for any version.
-- **52 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, greetings answered without volunteering order details, items the customer does not own (ask, accept a correction, escalate if they insist), refund history behind the frequency rule, the populated sample week, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
+- **106 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), brand-aware detection of items the customer does not own, the evidence recorded for security signals, the case table's query builder (parameterised filters, wildcard escaping, sort whitelist) and CSV formula protection, and tests that the rendered policy page matches the engine for any version.
+- **60 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, greetings answered without volunteering order details, items the customer does not own (ask, accept a correction, escalate if they insist), refund history behind the frequency rule, the populated sample week, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback), and the console table (sorting, filters and facet counts, safe search, CSV export). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
 The model path was also tested against a stubbed model that deliberately returns a policy-violating reply (a false approval with an invented amount) to confirm the output guard blocks it and logs `security.reply_blocked`, and against model failures to confirm the fallback path.
@@ -393,7 +403,7 @@ The model path was also tested against a stubbed model that deliberately returns
     ├── nginx.conf              # static hosting + /api proxy
     └── src/
         ├── pages/              # ChatPage, ConsolePage, PolicyStudioPage, PolicyPage
-        └── components/         # CaseDrawer, DecisionsChart, policy/ editors, UI primitives
+        └── components/         # CaseDrawer, console/ dashboard and table, policy/ editors, UI primitives
 ```
 
 ### Local development without Docker

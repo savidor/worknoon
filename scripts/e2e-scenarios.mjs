@@ -233,6 +233,32 @@ async function main() {
   const amara = await say(await customerSession('cus_01'), 'My AuraSound headphones from order WN-10001 arrived with a cracked headband.');
   check('persona scenarios still behave as documented after sample activity', amara.outcome === 'APPROVED');
 
+  console.log('\nSupport console table');
+  const byAmount = (await call('GET', '/admin/requests?sort=amount&dir=desc&status=APPROVED&limit=100', { token: admin })).json;
+  const amounts = byAmount.items.map((r) => r.refund_amount_cents);
+  check('cases sort by amount', amounts.length > 2 && amounts.every((a, i) => i === 0 || amounts[i - 1] >= a));
+  const flaggedView = (await call('GET', '/admin/requests?signals=manipulation_attempt&limit=100', { token: admin })).json;
+  check(
+    'risk signal filter returns only matching cases, with facet counts for the tabs',
+    flaggedView.total >= 1 && flaggedView.items.every((r) => r.risk_flags.includes('manipulation_attempt')) && flaggedView.facets.status.all === flaggedView.total,
+    JSON.stringify(flaggedView.facets?.status),
+  );
+  const team = (await call('GET', '/admin/requests?decidedBy=team&limit=100', { token: admin })).json;
+  check('decided-by filter separates the team from the automation', team.total === 4 && team.items.every((r) => r.reviewed_by));
+  const wildcard = (await call('GET', `/admin/requests?q=${encodeURIComponent('%')}`, { token: admin })).json;
+  check('search treats % as text, not a wildcard', wildcard.total === 0, String(wildcard.total));
+  check('unknown sort columns are rejected', (await call('GET', '/admin/requests?sort=password', { token: admin })).status === 400);
+  const csvRes = await fetch(`${API}/admin/requests/export?signals=manipulation_attempt`, { headers: { authorization: `Bearer ${admin}` } });
+  const csv = await csvRes.text();
+  check(
+    'CSV export matches the filtered view and is safe to open in a spreadsheet',
+    csvRes.ok && csv.split('\r\n').length === flaggedView.total + 1 && !/(^|,)[=+@]/m.test(csv),
+    csvRes.status,
+  );
+  check('CSV export needs a staff session', (await fetch(`${API}/admin/requests/export`)).status === 401);
+  const month = (await call('GET', '/admin/stats?days=30', { token: admin })).json;
+  check('activity chart covers the chosen range', month.daily.length === 30 && month.refunded_auto_cents + month.refunded_team_cents === month.refunded_cents);
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);
 }

@@ -21,3 +21,6 @@ export const humanize = (s: string) =>
   s.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase()).replace(/\bai\b/gi, 'AI');
 
 export const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');
+
+/** Decision time in the unit a person would say: "340 ms" or "2.6 sec". */
+export const duration = (ms: number) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} sec`);

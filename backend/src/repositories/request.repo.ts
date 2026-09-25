@@ -1,5 +1,8 @@
 import { pool, type Queryable } from '../db/pool.js';
 import type { Decision, Extraction, LineDecision, TraceStep, TriggeredRule } from '../domain/types.js';
+import { buildOrder, buildWhere, type RequestListFilters } from './request-query.js';
+
+export type { RequestListFilters } from './request-query.js';
 
 export interface NewRefundRequest {
   id: string;
@@ -51,45 +54,63 @@ export async function findOpenEscalation(orderId: string): Promise<{ id: string;
   return rows[0] ?? null;
 }
 
-export interface RequestListFilters {
-  status?: Decision;
-  flagged?: boolean;
-  q?: string;
-  limit: number;
-  offset: number;
-}
-
 const LIST_COLUMNS = `
   r.id, r.reference, r.status, r.system_decision, r.reason_category, r.reason_summary,
   r.refund_amount_cents, r.review_amount_cents, r.risk_flags, r.ai_provider, r.latency_ms,
   r.created_at, r.reviewed_by, r.reviewed_at, r.customer_message,
   c.id AS customer_id, c.name AS customer_name, o.order_number`;
 
+const FROM_SQL = `FROM refund_requests r
+  JOIN customers c ON c.id = r.customer_id
+  LEFT JOIN orders o ON o.id = r.order_id`;
+
 export async function listRequests(f: RequestListFilters) {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  if (f.status) {
-    params.push(f.status);
-    where.push(`r.status = $${params.length}`);
-  }
-  if (f.flagged) where.push(`cardinality(r.risk_flags) > 0`);
-  if (f.q) {
-    params.push(`%${f.q}%`);
-    where.push(`(r.reference ILIKE $${params.length} OR c.name ILIKE $${params.length} OR o.order_number ILIKE $${params.length})`);
-  }
-  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  params.push(f.limit, f.offset);
-  const { rows } = await pool.query(
+  const { clause, params } = buildWhere(f);
+  const page = pool.query(
     `SELECT ${LIST_COLUMNS}, count(*) OVER()::int AS total
-     FROM refund_requests r
-     JOIN customers c ON c.id = r.customer_id
-     LEFT JOIN orders o ON o.id = r.order_id
-     ${clause}
-     ORDER BY r.created_at DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params,
+     ${FROM_SQL} ${clause} ${buildOrder(f.sort, f.dir)}
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, f.limit, f.offset],
   );
-  return { total: (rows[0]?.total as number | undefined) ?? 0, items: rows.map(({ total: _t, ...rest }) => rest) };
+  // Facet counts respect every other active filter, so the numbers on tabs and menus match what a click would show.
+  const tabs = buildWhere(f, ['status', 'flagged']);
+  const statusFacet = pool.query(
+    `SELECT count(*)::int AS "all",
+            count(*) FILTER (WHERE r.status = 'ESCALATED')::int AS "ESCALATED",
+            count(*) FILTER (WHERE r.status = 'APPROVED')::int AS "APPROVED",
+            count(*) FILTER (WHERE r.status = 'DENIED')::int AS "DENIED",
+            count(*) FILTER (WHERE cardinality(r.risk_flags) > 0)::int AS flagged
+     ${FROM_SQL} ${tabs.clause}`,
+    tabs.params,
+  );
+  const reasons = buildWhere(f, ['reasons']);
+  const reasonFacet = pool.query(
+    `SELECT r.reason_category AS value, count(*)::int AS count ${FROM_SQL} ${reasons.clause}
+     GROUP BY 1 ORDER BY 2 DESC, 1`,
+    reasons.params,
+  );
+  const signals = buildWhere(f, ['signals']);
+  const signalFacet = pool.query(
+    `SELECT flag AS value, count(*)::int AS count ${FROM_SQL} CROSS JOIN LATERAL unnest(r.risk_flags) AS flag ${signals.clause}
+     GROUP BY 1 ORDER BY 2 DESC, 1`,
+    signals.params,
+  );
+  const [{ rows }, s, rs, sg] = await Promise.all([page, statusFacet, reasonFacet, signalFacet]);
+  return {
+    total: (rows[0]?.total as number | undefined) ?? 0,
+    items: rows.map(({ total: _t, ...rest }) => rest),
+    facets: { status: s.rows[0], reasons: rs.rows, signals: sg.rows },
+  };
+}
+
+/** Every matching case for a CSV export, capped so one request cannot pull the whole table. */
+export async function exportRequests(f: RequestListFilters, cap = 5000) {
+  const { clause, params } = buildWhere(f);
+  const { rows } = await pool.query(
+    `SELECT ${LIST_COLUMNS}, r.policy_version ${FROM_SQL} ${clause} ${buildOrder(f.sort, f.dir)} LIMIT $${params.length + 1}`,
+    [...params, cap],
+  );
+  return rows;
 }
 
 export async function getRequest(id: string, db: Queryable = pool) {
@@ -124,7 +145,8 @@ export async function resolveReview(
   );
 }
 
-export async function getStats() {
+/** Headline figures plus a day-by-day series for the last `days` days, compared with the period before. */
+export async function getStats(days = 7) {
   const { rows } = await pool.query(`
     SELECT
       count(*)::int AS total,
@@ -135,19 +157,26 @@ export async function getStats() {
       count(*) FILTER (WHERE reviewed_at IS NOT NULL)::int AS human_reviewed,
       count(*) FILTER (WHERE cardinality(risk_flags) > 0)::int AS flagged,
       COALESCE(sum(refund_amount_cents) FILTER (WHERE status = 'APPROVED'), 0)::bigint AS refunded_cents,
+      COALESCE(sum(refund_amount_cents) FILTER (WHERE status = 'APPROVED' AND reviewed_at IS NULL), 0)::bigint AS refunded_auto_cents,
+      COALESCE(sum(refund_amount_cents) FILTER (WHERE status = 'APPROVED' AND reviewed_at IS NOT NULL), 0)::bigint AS refunded_team_cents,
       COALESCE(sum(review_amount_cents) FILTER (WHERE status = 'ESCALATED'), 0)::bigint AS pending_cents,
-      COALESCE(round(avg(latency_ms)), 0)::int AS avg_latency_ms
-    FROM refund_requests`);
+      COALESCE(round(avg(latency_ms)), 0)::int AS avg_latency_ms,
+      count(*) FILTER (WHERE created_at >= current_date - ($1::int - 1))::int AS period_cases,
+      count(*) FILTER (WHERE created_at >= current_date - (2 * $1::int - 1) AND created_at < current_date - ($1::int - 1))::int AS previous_cases,
+      COALESCE(sum(refund_amount_cents) FILTER (WHERE status = 'APPROVED' AND created_at >= current_date - ($1::int - 1)), 0)::bigint AS period_refunded_cents,
+      COALESCE(sum(refund_amount_cents) FILTER (WHERE status = 'APPROVED' AND created_at >= current_date - (2 * $1::int - 1) AND created_at < current_date - ($1::int - 1)), 0)::bigint AS previous_refunded_cents
+    FROM refund_requests`, [days]);
   const { rows: daily } = await pool.query(`
     SELECT to_char(d::date, 'YYYY-MM-DD') AS day,
            count(r.id) FILTER (WHERE r.system_decision = 'APPROVED')::int AS approved,
            count(r.id) FILTER (WHERE r.system_decision = 'DENIED')::int AS denied,
-           count(r.id) FILTER (WHERE r.system_decision = 'ESCALATED')::int AS escalated
-    FROM generate_series(current_date - 6, current_date, interval '1 day') d
+           count(r.id) FILTER (WHERE r.system_decision = 'ESCALATED')::int AS escalated,
+           COALESCE(sum(r.refund_amount_cents) FILTER (WHERE r.status = 'APPROVED'), 0)::bigint AS refunded_cents
+    FROM generate_series(current_date - ($1::int - 1), current_date, interval '1 day') d
     LEFT JOIN refund_requests r ON r.created_at::date = d::date
-    GROUP BY d ORDER BY d`);
+    GROUP BY d ORDER BY d`, [days]);
   const { rows: reasons } = await pool.query(`
     SELECT reason_category AS reason, count(*)::int AS count
     FROM refund_requests GROUP BY reason_category ORDER BY count DESC`);
-  return { ...rows[0], daily, reasons };
+  return { ...rows[0], days, daily, reasons };
 }

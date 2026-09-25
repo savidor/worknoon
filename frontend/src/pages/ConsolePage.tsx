@@ -1,22 +1,16 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clock, DatabaseZap, LogOut, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { api, ApiError, type Decision, type RequestSummary, type Stats } from '../api/client';
+import { DatabaseZap, LogOut } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { adminUsername, api, ApiError, type Stats } from '../api/client';
 import { AdminGate, ConsoleTabs } from '../components/AdminGate';
 import { CaseDrawer } from '../components/CaseDrawer';
-import { DecisionsChart } from '../components/DecisionsChart';
-import { Button, Card, FlagBadge, OutcomeBadge, Pill, Spinner } from '../components/ui';
-import { cx, humanize, money, relative } from '../lib/format';
-
-type Filter = 'all' | Decision | 'flagged';
-
-const FILTERS: Array<{ id: Filter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'ESCALATED', label: 'Needs review' },
-  { id: 'APPROVED', label: 'Approved' },
-  { id: 'DENIED', label: 'Denied' },
-  { id: 'flagged', label: 'Flagged' },
-];
+import { ActivityChart, RANGES, type Range } from '../components/console/ActivityChart';
+import { CasesTable } from '../components/console/CasesTable';
+import { Overview, type QuickView } from '../components/console/Overview';
+import { SecurityFeed } from '../components/console/SecurityFeed';
+import { Button } from '../components/ui';
+import { money } from '../lib/format';
 
 export function ConsolePage() {
   return <AdminGate>{(logout) => <Console onLogout={logout} />}</AdminGate>;
@@ -24,27 +18,16 @@ export function ConsolePage() {
 
 function Console({ onLogout }: { onLogout: () => void }) {
   const qc = useQueryClient();
-  const [filter, setFilter] = useState<Filter>('all');
-  const [q, setQ] = useState('');
+  const [params, setParams] = useSearchParams();
   const [openId, setOpenId] = useState<string | null>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
+  const range = (RANGES.find((r) => String(r) === params.get('range')) ?? 7) as Range;
 
-  const stats = useQuery({ queryKey: ['stats'], queryFn: () => api<Stats>('/admin/stats', { role: 'admin' }), refetchInterval: 5_000 });
-
-  const params = new URLSearchParams({ limit: '50' });
-  if (filter === 'flagged') params.set('flagged', 'true');
-  else if (filter !== 'all') params.set('status', filter);
-  if (q.trim()) params.set('q', q.trim());
-  const requests = useQuery({
-    queryKey: ['requests', params.toString()],
-    queryFn: () => api<{ total: number; items: RequestSummary[] }>(`/admin/requests?${params}`, { role: 'admin' }),
+  const stats = useQuery({
+    queryKey: ['stats', range],
+    queryFn: () => api<Stats>(`/admin/stats?days=${range}`, { role: 'admin' }),
     refetchInterval: 5_000,
     placeholderData: keepPreviousData,
-  });
-
-  const security = useQuery({
-    queryKey: ['security'],
-    queryFn: () => api<{ events: Array<{ id: number; type: string; severity: string; detail: Record<string, unknown>; created_at: string; reference: string | null; customer_name: string | null; request_id: string | null }> }>('/admin/security-events', { role: 'admin' }),
-    refetchInterval: 10_000,
   });
 
   const reset = useMutation({
@@ -57,186 +40,56 @@ function Console({ onLogout }: { onLogout: () => void }) {
     if (sessionExpired) onLogout();
   }, [sessionExpired, onLogout]);
 
-  const s = stats.data;
-  const autoRate = s && s.total > 0 ? Math.round(((s.total - s.escalated_total) / s.total) * 100) : 0;
+  const setRange = (r: Range) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (r === 7) p.delete('range');
+        else p.set('range', String(r));
+        return p;
+      },
+      { replace: true },
+    );
+
+  // The overview tiles are shortcuts: each one opens the table on the matching cases.
+  const pick = (view: QuickView) => {
+    const p = new URLSearchParams();
+    if (params.get('range')) p.set('range', params.get('range')!);
+    if (view === 'auto') p.set('decided', 'auto');
+    else p.set('view', view);
+    setParams(p, { replace: true });
+    tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">Support console</h1>
-          <p className="text-sm text-slate-500">Every decision, the reasoning behind it, and a queue for the cases that need a person.</p>
-        </div>
-        <ConsoleTabs />
-        <div className="ml-auto flex gap-2">
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+        <Greeting stats={stats.data} />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <ConsoleTabs />
           <Button
-            variant="secondary"
+            variant="ghost"
             onClick={() => window.confirm('Reset demo data? Cases, conversations and policy changes are replaced with the original policy and a fresh week of sample activity.') && reset.mutate()}
             loading={reset.isPending}
+            title="Reset demo data"
           >
-            <DatabaseZap className="size-4" aria-hidden /> Reset demo data
+            <DatabaseZap className="size-4" aria-hidden /> <span className="hidden sm:inline">Reset demo</span>
           </Button>
-          <Button variant="ghost" onClick={onLogout}>
-            <LogOut className="size-4" aria-hidden /> Sign out
+          <Button variant="ghost" onClick={onLogout} title="Sign out">
+            <LogOut className="size-4" aria-hidden /> <span className="hidden sm:inline">Sign out</span>
           </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {/* Until stats arrive, show a placeholder rather than zeros that look like real figures. */}
-        <Stat label="Cases" value={s ? s.total : '...'} hint={s ? `${s.human_reviewed} reviewed by a person` : undefined} />
-        <Stat label="Resolved automatically" value={s ? `${autoRate}%` : '...'} hint="Approved or denied without review" />
-        <Stat label="Needs review" value={s ? s.pending_review : '...'} hint={s ? `${money(s.pending_cents)} on hold` : undefined} tone={s?.pending_review ? 'amber' : undefined} />
-        <Stat label="Refunded by RefundDesk" value={s ? money(s.refunded_cents) : '...'} hint={s ? `${s.approved} approved · ${s.denied} denied` : undefined} />
-        <Stat label="Flagged" value={s ? s.flagged : '...'} hint="Risk or security signals" tone={s?.flagged ? 'rose' : undefined} />
-        <Stat label="Avg decision time" value={s ? `${(s.avg_latency_ms / 1000).toFixed(1)}s` : '...'} hint="End to end, incl. AI" />
+      <Overview stats={stats.data} onPick={pick} />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
+        <ActivityChart stats={stats.data} range={range} onRange={setRange} />
+        <SecurityFeed onOpen={setOpenId} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <Card
-          title={
-            <span className="flex items-center gap-2">
-              Refund requests <Pill>{requests.data?.total ?? 0}</Pill>
-            </span>
-          }
-          action={
-            <label className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-slate-400" aria-hidden />
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Reference, customer, order"
-                aria-label="Search requests"
-                className="w-56 rounded-lg py-1.5 pr-3 pl-8 text-sm ring-1 ring-slate-300 outline-none focus:ring-2 focus:ring-brand-500"
-              />
-            </label>
-          }
-        >
-          <div className="flex gap-1 overflow-x-auto border-b border-slate-100 px-3 py-2" role="tablist">
-            {FILTERS.map((f) => (
-              <button
-                key={f.id}
-                role="tab"
-                aria-selected={filter === f.id}
-                onClick={() => setFilter(f.id)}
-                className={cx(
-                  'rounded-md px-2.5 py-1 text-sm font-medium whitespace-nowrap transition',
-                  filter === f.id ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100',
-                )}
-              >
-                {f.label}
-                {f.id === 'ESCALATED' && !!s?.pending_review && (
-                  <span className="ml-1.5 rounded-full bg-amber-500 px-1.5 text-[10px] text-white">{s.pending_review}</span>
-                )}
-              </button>
-            ))}
-          </div>
-          {requests.isLoading ? (
-            <Spinner />
-          ) : requests.data?.items.length === 0 ? (
-            <p className="p-8 text-center text-sm text-slate-500">
-              No refund requests yet. Send one from the customer chat and it will appear here.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-left text-xs text-slate-500">
-                  <tr>
-                    <th className="px-4 py-2 font-medium">Case</th>
-                    <th className="px-4 py-2 font-medium">Customer</th>
-                    <th className="px-4 py-2 font-medium">Reason</th>
-                    <th className="px-4 py-2 font-medium">Outcome</th>
-                    <th className="px-4 py-2 text-right font-medium">Amount</th>
-                    <th className="px-4 py-2 font-medium">When</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {requests.data?.items.map((r) => (
-                    <tr
-                      key={r.id}
-                      onClick={() => setOpenId(r.id)}
-                      // Start loading the case while the pointer is on its way, so the drawer opens with data.
-                      onMouseEnter={() => void qc.prefetchQuery({ queryKey: ['request', r.id], queryFn: () => api(`/admin/requests/${r.id}`, { role: 'admin' }), staleTime: 10_000 })}
-                      onKeyDown={(e) => e.key === 'Enter' && setOpenId(r.id)}
-                      tabIndex={0}
-                      className={cx('cursor-pointer transition hover:bg-slate-50 focus:bg-brand-50 focus:outline-none', openId === r.id && 'bg-brand-50/60')}
-                    >
-                      <td className="px-4 py-2.5">
-                        <p className="font-mono text-xs font-medium whitespace-nowrap">{r.reference}</p>
-                        <p className="text-xs text-slate-500">{r.order_number ?? 'no order'}</p>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <p className="font-medium">{r.customer_name}</p>
-                        {r.risk_flags.length > 0 && (
-                          <div className="mt-0.5 flex flex-wrap gap-1">
-                            {r.risk_flags.slice(0, 2).map((f) => (
-                              <FlagBadge key={f}>{humanize(f)}</FlagBadge>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                      <td className="max-w-[260px] px-4 py-2.5">
-                        <p className="text-xs font-medium text-slate-700">{humanize(r.reason_category)}</p>
-                        <p className="truncate text-xs text-slate-500" title={r.customer_message}>
-                          {r.customer_message}
-                        </p>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <OutcomeBadge outcome={r.status} />
-                        {r.reviewed_at && <p className="mt-0.5 text-[11px] text-slate-500">by {r.reviewed_by}</p>}
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">
-                        {r.status === 'APPROVED' ? money(r.refund_amount_cents) : r.status === 'ESCALATED' ? <span className="text-slate-500">{money(r.review_amount_cents)}</span> : <span className="text-slate-400">n/a</span>}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs whitespace-nowrap text-slate-500">
-                        <span className="inline-flex items-center gap-1">
-                          <Clock className="size-3" aria-hidden />
-                          {relative(r.created_at)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-
-        <div className="space-y-5">
-          <Card title="Decisions, last 7 days">
-            <div className="p-4">{s ? <DecisionsChart daily={s.daily} /> : <Spinner />}</div>
-          </Card>
-          <Card title="Security log" action={<ShieldCheck className="size-4 text-slate-400" aria-hidden />}>
-            {security.data?.events.length ? (
-              <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto scrollbar-thin">
-                {security.data.events.map((e) => (
-                  <li key={e.id}>
-                    <button
-                      type="button"
-                      disabled={!e.request_id}
-                      onClick={() => e.request_id && setOpenId(e.request_id)}
-                      className="w-full px-4 py-2.5 text-left transition enabled:hover:bg-slate-50"
-                    >
-                      <div className="flex items-center gap-2">
-                        <ShieldAlert className={cx('size-4', e.severity === 'critical' ? 'text-rose-600' : 'text-amber-500')} aria-hidden />
-                        <span className="text-xs font-medium">{humanize(e.type.replace('security.', ''))}</span>
-                        <span className="ml-auto text-[11px] text-slate-400">{relative(e.created_at)}</span>
-                      </div>
-                      <p className="mt-0.5 truncate pl-6 text-xs text-slate-500">
-                        {e.customer_name ?? 'Unknown'}
-                        {e.reference ? ` · ${e.reference}` : ''}
-                        {typeof e.detail.excerpt === 'string' ? ` · "${e.detail.excerpt}"` : ''}
-                        {Array.isArray(e.detail.violations) ? ` · ${(e.detail.violations as string[]).join(', ')}` : ''}
-                      </p>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="p-4 text-sm text-slate-500">No security events. Try the prompt injection scenario (Emily Nguyen).</p>
-            )}
-          </Card>
-        </div>
+      <div ref={tableRef} className="scroll-mt-20">
+        <CasesTable openId={openId} onOpen={setOpenId} />
       </div>
 
       {openId && <CaseDrawer id={openId} onClose={() => setOpenId(null)} />}
@@ -244,12 +97,31 @@ function Console({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-function Stat({ label, value, hint, tone }: { label: string; value: string | number; hint?: string; tone?: 'amber' | 'rose' }) {
+/** A short, human summary of where things stand, so the page opens with an answer rather than a grid. */
+function Greeting({ stats: s }: { stats: Stats | undefined }) {
+  const hour = new Date().getHours();
+  const part = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+  const raw = adminUsername();
+  const name = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : null;
+  const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  let summary = 'Loading the latest cases...';
+  if (s) {
+    const handled = s.total - s.pending_review;
+    if (s.total === 0) summary = 'No cases yet. When a customer asks for a refund, it will show up here.';
+    else if (s.pending_review === 0) summary = `You're all caught up. All ${s.total} cases have a decision.`;
+    else
+      summary = `${s.pending_review} ${s.pending_review === 1 ? 'case is' : 'cases are'} waiting for you, ${money(s.pending_cents)} in total. The other ${handled} already have a decision.`;
+  }
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className={cx('mt-1 text-2xl font-semibold tabular-nums', tone === 'amber' && 'text-amber-700', tone === 'rose' && 'text-rose-700')}>{value}</p>
-      {hint && <p className="mt-0.5 truncate text-[11px] text-slate-500">{hint}</p>}
+    <div className="min-w-0">
+      <p className="text-xs text-slate-500">{date}</p>
+      <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
+        Good {part}
+        {name ? `, ${name}` : ''}
+      </h1>
+      <p className="mt-0.5 text-sm text-slate-600">{summary}</p>
     </div>
   );
 }

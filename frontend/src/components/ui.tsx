@@ -126,3 +126,34 @@ export function ErrorNote({ error }: { error: unknown }) {
     </div>
   );
 }
+
+// Soft tones with dark text, each above 4.5:1 contrast. Picked per name so a customer keeps their colour.
+const AVATAR_TONES = [
+  'bg-rose-100 text-rose-800',
+  'bg-amber-100 text-amber-900',
+  'bg-lime-100 text-lime-900',
+  'bg-emerald-100 text-emerald-800',
+  'bg-sky-100 text-sky-800',
+  'bg-violet-100 text-violet-800',
+  'bg-fuchsia-100 text-fuchsia-800',
+  'bg-orange-100 text-orange-900',
+];
+
+export function Avatar({ name, className }: { name: string; className?: string }) {
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join('');
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return (
+    <span
+      aria-hidden
+      className={cx('inline-flex size-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold', AVATAR_TONES[hash % AVATAR_TONES.length], className)}
+    >
+      {initials}
+    </span>
+  );
+}

@@ -119,6 +119,7 @@ export interface AuditEvent {
 }
 
 export interface Stats {
+  days: number;
   total: number;
   approved: number;
   denied: number;
@@ -127,10 +128,31 @@ export interface Stats {
   human_reviewed: number;
   flagged: number;
   refunded_cents: number;
+  refunded_auto_cents: number;
+  refunded_team_cents: number;
   pending_cents: number;
   avg_latency_ms: number;
-  daily: Array<{ day: string; approved: number; denied: number; escalated: number }>;
+  period_cases: number;
+  previous_cases: number;
+  period_refunded_cents: number;
+  previous_refunded_cents: number;
+  daily: Array<{ day: string; approved: number; denied: number; escalated: number; refunded_cents: number }>;
   reasons: Array<{ reason: string; count: number }>;
+}
+
+export interface Facet {
+  value: string;
+  count: number;
+}
+
+export interface RequestPage {
+  total: number;
+  items: RequestSummary[];
+  facets: {
+    status: { all: number; ESCALATED: number; APPROVED: number; DENIED: number; flagged: number };
+    reasons: Facet[];
+    signals: Facet[];
+  };
 }
 
 export type FieldType = 'enum' | 'string' | 'money' | 'number' | 'boolean';
@@ -244,4 +266,32 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     throw new ApiError(res.status, json?.error?.message ?? `Request failed (${res.status})`, Array.isArray(json?.error?.details) ? json.error.details : []);
   }
   return json as T;
+}
+
+/** Downloads an authenticated file, such as a CSV export, without exposing the token in a URL. */
+export async function download(path: string, role: Role, fallbackName: string): Promise<void> {
+  const token = tokens.get(role);
+  const res = await fetch(`/api${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    if (res.status === 401) tokens.set(role, null);
+    throw new ApiError(res.status, `Download failed (${res.status})`);
+  }
+  const name = res.headers.get('content-disposition')?.match(/filename="?([^";]+)"?/)?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+/** The signed-in staff member's name, read from the session token. Display only; the server never trusts it. */
+export function adminUsername(): string | null {
+  const token = tokens.get('admin');
+  try {
+    const payload = JSON.parse(atob(token!.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as { sub?: string };
+    return payload.sub ?? null;
+  } catch {
+    return null;
+  }
 }
