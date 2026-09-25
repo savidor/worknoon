@@ -268,6 +268,7 @@ Customer-facing replies never reveal that anything was detected. The attacker se
 - **Decisions over 7 days**, split by outcome.
 - **Request queue** with filters (needs review, approved, denied, flagged) and search by reference, customer or order.
 - **Case detail**: the customer's message, what the AI understood (with confidence), the customer's refund history from the ledger (including refunds made before RefundDesk, and how many fall inside the frequency lookback), per-item decisions, every triggered rule with its explanation, the reply that was sent, the AI's note for the reviewer, the timed pipeline trace, the audit trail, and the full conversation.
+- **Written for non-technical reviewers**: every escalation says in plain words why the case needs a person and what to check (for example "Refunds above $500 always need a person to confirm. What to check: confirm the problem is genuine, for example by asking for photos"). Manipulation attempts are explained in plain English ("Included hidden code that pretends to be an instruction from our system") with the exact words highlighted in the customer's message. Rule codes stay available under "Technical detail".
 - **Human review**: approve or deny an escalated case with a required internal note and an optional message to the customer. Approval re-checks item state inside a locked transaction, writes to the refund ledger, and posts an update into the customer's chat.
 - **Security log**: manipulation attempts, cross-account access, and blocked replies.
 

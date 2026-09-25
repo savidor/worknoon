@@ -13,8 +13,13 @@ interface RefundHistory {
   amountInWindowCents: number;
 }
 
+type RuleGuide = Record<string, { title: string; hint: { why: string; check: string } | null }>;
+type Evidence = Array<{ signal: string; label: string; text: string }>;
+
 interface Detail {
   request: RequestDetail;
+  ruleGuide: RuleGuide;
+  evidence: Evidence;
   events: AuditEvent[];
   transcript: Message[];
   order: Order | null;
@@ -97,7 +102,7 @@ export function CaseDrawer({ id, onClose }: { id: string; onClose: () => void })
           <ErrorNote error={error} />
           {data && r && (
             <>
-              {r.status === 'ESCALATED' && <ReviewPanel request={r} />}
+              {r.status === 'ESCALATED' && <ReviewPanel request={r} guide={data.ruleGuide ?? {}} />}
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <Fact label="Customer">
@@ -136,10 +141,15 @@ export function CaseDrawer({ id, onClose }: { id: string; onClose: () => void })
                 </Fact>
               </div>
 
+              <FlaggedExplanation request={r} evidence={data.evidence ?? []} />
+
               <Section icon={<ScrollText className="size-4" />} title="Customer message">
                 <blockquote className="rounded-lg border-l-4 border-slate-300 bg-slate-50 px-3 py-2 text-sm whitespace-pre-wrap text-slate-700">
-                  {r.customer_message}
+                  <Highlighted text={r.customer_message} phrases={(data.evidence ?? []).map((e) => e.text)} />
                 </blockquote>
+                {(data.evidence ?? []).some((e) => e.text) && (
+                  <p className="mt-1 text-[11px] text-rose-700">Highlighted: the words that triggered the security check.</p>
+                )}
               </Section>
 
               {r.extraction && <ExtractionView extraction={r.extraction} />}
@@ -197,8 +207,9 @@ export function CaseDrawer({ id, onClose }: { id: string; onClose: () => void })
                         {rule.effect}
                       </span>
                       <span>
-                        <span className="font-mono text-xs font-medium">{rule.id}</span>
+                        <span className="font-medium">{data.ruleGuide?.[rule.id]?.title ?? humanize(rule.id.toLowerCase())}</span>
                         <span className="text-slate-600">: {rule.detail}</span>
+                        <span className="ml-1.5 font-mono text-[10px] text-slate-400">{rule.id}</span>
                       </span>
                     </li>
                   ))}
@@ -279,7 +290,7 @@ export function CaseDrawer({ id, onClose }: { id: string; onClose: () => void })
   );
 }
 
-function ReviewPanel({ request }: { request: RequestDetail }) {
+function ReviewPanel({ request, guide }: { request: RequestDetail; guide: RuleGuide }) {
   const qc = useQueryClient();
   const [note, setNote] = useState('');
   const [message, setMessage] = useState('');
@@ -300,12 +311,27 @@ function ReviewPanel({ request }: { request: RequestDetail }) {
         <h3 className="text-sm font-semibold text-amber-900">Needs a decision</h3>
         <span className="ml-auto text-sm font-semibold tabular-nums text-amber-900">{money(request.review_amount_cents)}</span>
       </div>
-      <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-amber-900">
-        {escalationRules.map((r, i) => (
-          <li key={i}>
-            <span className="font-medium">{humanize(r.id.toLowerCase())}:</span> {r.detail}
-          </li>
-        ))}
+      <p className="mt-2 text-xs font-medium text-amber-900">Why this needs you</p>
+      <ul className="mt-1 space-y-2">
+        {escalationRules.map((r, i) => {
+          const hint = guide[r.id]?.hint;
+          return (
+            <li key={i} className="rounded-lg bg-white/70 px-3 py-2 text-sm text-slate-800 ring-1 ring-amber-200">
+              <p>{hint?.why ?? r.detail}</p>
+              {hint && (
+                <p className="mt-1 text-xs text-slate-600">
+                  <span className="font-semibold text-slate-700">What to check:</span> {hint.check}
+                </p>
+              )}
+              <details className="mt-1">
+                <summary className="cursor-pointer text-[11px] text-slate-400">Technical detail</summary>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  <span className="font-mono">{r.id}</span>: {r.detail}
+                </p>
+              </details>
+            </li>
+          );
+        })}
       </ul>
       <label className="mt-3 block text-xs font-medium text-slate-700">
         Decision note (internal, required)
@@ -374,15 +400,10 @@ function ExtractionView({ extraction }: { extraction: Record<string, unknown> })
           <Field label="Summary">{e.reasonSummary}</Field>
         </div>
       </dl>
-      {(e.manipulationSignals.length > 0 || e.unknownItemMentions.length > 0) && (
+      {e.unknownItemMentions.length > 0 && (
         <div className="mt-3 space-y-1 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800 ring-1 ring-rose-600/15">
-          {e.manipulationSignals.map((s) => (
-            <p key={s} className="flex items-center gap-1.5">
-              <ShieldAlert className="size-3.5 shrink-0" aria-hidden /> {s}
-            </p>
-          ))}
           {e.unknownItemMentions.map((s) => (
-            <p key={s}>Mentioned item not on any order: {s}</p>
+            <p key={s}>Mentioned an item that is not on any of their orders: {s}</p>
           ))}
         </div>
       )}
@@ -418,5 +439,49 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <dt className="text-[11px] text-slate-400">{label}</dt>
       <dd className="text-slate-800">{children}</dd>
     </div>
+  );
+}
+
+/** Renders text with the given phrases highlighted, case-insensitively. */
+function Highlighted({ text, phrases }: { text: string; phrases: string[] }) {
+  const wanted = [...new Set(phrases.filter((p) => p && p.length >= 3))].sort((a, b) => b.length - a.length);
+  if (!wanted.length) return <>{text}</>;
+  const escaped = wanted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const parts = text.split(new RegExp(`(${escaped.join('|')})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) =>
+        wanted.some((w) => w.toLowerCase() === part.toLowerCase()) ? (
+          <mark key={i} className="rounded bg-rose-100 px-0.5 text-rose-900">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/** A plain-English summary of why a message was treated as a manipulation attempt. */
+function FlaggedExplanation({ request, evidence }: { request: RequestDetail; evidence: Evidence }) {
+  const signals = (request.extraction as { manipulationSignals?: string[] } | null)?.manipulationSignals ?? [];
+  const reasons = [...new Set([...evidence.map((e) => e.label), ...signals])];
+  if (!reasons.length) return null;
+  return (
+    <section className="rounded-xl border border-rose-200 bg-rose-50/70 p-4">
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold text-rose-900">
+        <ShieldAlert className="size-4" aria-hidden /> Why this message was flagged
+      </h3>
+      <p className="mt-1 text-xs text-rose-900/80">
+        The customer's message tried to influence the assistant instead of just describing a problem. The assistant ignored these
+        instructions and passed the case to a person. Nothing was refunded because of them.
+      </p>
+      <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-rose-900">
+        {reasons.map((r) => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
+    </section>
   );
 }

@@ -51,19 +51,57 @@ const PATTERNS: Pattern[] = [
 
 export const INJECTION_THRESHOLD = 3;
 
+/** Plain-English meaning of each signal, written for support staff rather than engineers. */
+export const SIGNAL_LABELS: Record<string, string> = {
+  ignore_instructions: 'Told the assistant to ignore its instructions or the refund policy',
+  role_hijack: 'Tried to give the assistant a new role ("you are now...")',
+  system_prompt_probe: "Asked for the assistant's hidden instructions",
+  mode_switch: 'Tried to switch the assistant into a special "admin" or "developer" mode',
+  authority_claim: 'Claimed to be staff, a manager or an administrator',
+  system_override: 'Wrote a fake "system override" or claimed to authorise the refund',
+  block_review: 'Asked for the request not to be reviewed or escalated',
+  forced_outcome: 'Demanded that the assistant approve the refund',
+  policy_override: 'Asked for approval regardless of the refund policy',
+  fake_markup: 'Included hidden code that pretends to be an instruction from our system',
+  output_forging: 'Told the assistant exactly what to reply',
+  encoded_payload: 'Included scrambled or encoded text that could hide instructions',
+  invisible_characters: 'Contained invisible characters that can hide text',
+};
+
+export const describeSignal = (id: string) => SIGNAL_LABELS[id] ?? id.replaceAll('_', ' ');
+
 export interface InjectionScan {
   score: number;
   matches: string[];
   flagged: boolean;
+  /** The exact words that triggered each signal, so reviewers can see them highlighted. */
+  evidence: Array<{ signal: string; label: string; text: string }>;
+}
+
+/**
+ * The words to show a reviewer. For fake markup, that is everything from the first forged tag
+ * to the last one, so the whole injected "instruction" is highlighted, not just one tag.
+ */
+function evidenceText(p: Pattern, text: string, first: RegExpMatchArray): string {
+  if (p.id === 'fake_markup') {
+    const all = [...text.matchAll(new RegExp(p.re.source, 'gi'))];
+    const start = all[0]?.index ?? first.index ?? 0;
+    const last = all.at(-1);
+    const end = last && last.index !== undefined ? last.index + last[0].length : start + first[0].length;
+    return text.slice(start, end).slice(0, 300);
+  }
+  return first[0].slice(0, 200);
 }
 
 export function scanForInjection(text: string, removedInvisible = 0): InjectionScan {
-  const matches = PATTERNS.filter((p) => p.re.test(text));
-  let score = matches.reduce((s, p) => s + p.weight, 0);
-  const ids = matches.map((p) => p.id);
+  const hits = PATTERNS.map((p) => ({ p, m: text.match(p.re) })).filter((h) => h.m);
+  let score = hits.reduce((s, h) => s + h.p.weight, 0);
+  const ids = hits.map((h) => h.p.id);
+  const evidence = hits.map((h) => ({ signal: h.p.id, label: describeSignal(h.p.id), text: evidenceText(h.p, text, h.m!) }));
   if (removedInvisible > 0) {
     score += 2;
     ids.push('invisible_characters');
+    evidence.push({ signal: 'invisible_characters', label: describeSignal('invisible_characters'), text: '' });
   }
-  return { score, matches: ids, flagged: score >= INJECTION_THRESHOLD };
+  return { score, matches: ids, flagged: score >= INJECTION_THRESHOLD, evidence };
 }

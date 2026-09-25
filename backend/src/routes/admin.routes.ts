@@ -9,6 +9,7 @@ import { listMessages } from '../repositories/conversation.repo.js';
 import { getOrderById, refundHistory } from '../repositories/crm.repo.js';
 import { getRequest, getStats, listRequests } from '../repositories/request.repo.js';
 import { resetDemoData } from '../seed/demo.js';
+import { ruleCatalog } from '../policy/policy.js';
 import { getActivePolicy } from '../services/policy.service.js';
 import { reviewRequest } from '../services/review.service.js';
 
@@ -49,8 +50,20 @@ adminRouter.get('/requests/:id', async (req, res) => {
   const caseAt = new Date(request.created_at).getTime();
   const windowStart = caseAt - policy.config.frequencyLookbackDays * 86_400_000;
   const inWindow = history.filter((h) => h.createdAt.getTime() < caseAt && h.createdAt.getTime() >= windowStart);
+  // Plain-language guidance for every rule on this case, for reviewers who are not engineers.
+  const catalog = ruleCatalog(policy);
+  const ruleGuide = Object.fromEntries(
+    (request.rules_triggered as Array<{ id: string }>).map((r) => {
+      const def = catalog.get(r.id);
+      return [r.id, { title: def?.title ?? r.id, hint: def?.reviewerHint ?? null }];
+    }),
+  );
+  // The exact words that triggered the manipulation scan, to highlight in the message.
+  const inputGuard = (request.trace as Array<{ stage: string; data?: { evidence?: unknown } }>).find((t) => t.stage === 'input_guard');
   res.json({
     request,
+    ruleGuide,
+    evidence: inputGuard?.data?.evidence ?? [],
     events,
     transcript,
     order,

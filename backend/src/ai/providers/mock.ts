@@ -1,5 +1,5 @@
 import type { Extraction, Intent, ReasonCategory } from '../../domain/types.js';
-import { scanForInjection } from '../../security/input.js';
+import { describeSignal, scanForInjection } from '../../security/input.js';
 import { normalizeOrderNumber } from '../schemas.js';
 import { templateReply } from '../templates.js';
 import type { AiProvider, AiResult, ExtractionContext, ReplyContext, ReplyDraft } from '../types.js';
@@ -123,7 +123,7 @@ export class MockProvider implements AiProvider {
         reasonSummary: `Customer message classified by keyword heuristics as ${reasonCategory.replaceAll('_', ' ')}.`,
         claimedAmount: amount ? Number(amount.replace(/,/g, '')) : null,
         unknownItemMentions: unknown.mentions,
-        manipulationSignals: scan.flagged ? scan.matches.map((m) => `heuristic:${m}`) : [],
+        manipulationSignals: scan.flagged ? scan.matches.map(describeSignal) : [],
         confidence: intent === 'other' ? 0.5 : reasonCategory === 'unknown' ? 0.7 : 0.85,
       },
     };

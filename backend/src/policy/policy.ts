@@ -1,6 +1,6 @@
 import type { RuleEffect } from '../domain/types.js';
 import { formatCents } from '../lib/money.js';
-import type { CustomRule } from './custom-rules.js';
+import { describeRule, type CustomRule } from './custom-rules.js';
 
 /**
  * Thresholds a policy owner may change from the Policy Studio. Everything here is data:
@@ -60,6 +60,8 @@ export interface RuleDefinition {
   effect: RuleEffect;
   /** Customer-safe wording. Must never reveal risk or fraud signals. */
   customerText: string;
+  /** Plain-language explanation for support staff: why the case needs them, and what to check. */
+  reviewerHint?: { why: string; check: string };
   custom?: boolean;
 }
 
@@ -115,7 +117,51 @@ export function builtInRules(config: PolicyConfig): Record<RuleId, RuleDefinitio
     { section: '8.6', title: 'Request could not be understood with enough confidence', effect: 'ESCALATED', customerText: 'we want to make sure we understand your request correctly' },
     { section: '8.7', title: 'Request still unclear after clarification attempts', effect: 'ESCALATED', customerText: 'we want to make sure we understand your request correctly without asking you to repeat yourself' },
   ];
-  return Object.fromEntries(BUILT_IN_IDS.map((id, i) => [id, { id, ...defs[i]! }])) as Record<RuleId, RuleDefinition>;
+  const hints: Partial<Record<RuleId, { why: string; check: string }>> = {
+    HIGH_VALUE: {
+      why: `The refund is above ${threshold}. Refunds this large always need a person to confirm.`,
+      check: 'Confirm the problem is genuine, for example by asking for photos, then approve.',
+    },
+    REFUND_FREQUENCY: {
+      why: `This customer has had ${config.frequencyMaxRefunds} or more refunds in the last ${config.frequencyLookbackDays} days.`,
+      check: 'Look at the refund history for a pattern before approving.',
+    },
+    ACCOUNT_FLAG: {
+      why: 'The account has a past payment dispute or a security flag.',
+      check: 'Approve only if the claim is clearly genuine; ask for evidence if unsure.',
+    },
+    CLAIM_MISMATCH: {
+      why: "Something the customer says doesn't match our records, such as an item they never ordered or an amount above what they paid.",
+      check: 'Compare the message with the order. Deny if the claim cannot be matched to what they bought.',
+    },
+    MANIPULATION_ATTEMPT: {
+      why: 'The message tried to trick the assistant into approving a refund. The assistant ignored it.',
+      check: 'Judge only the real order facts. If there is no genuine problem with the order, deny.',
+    },
+    DELIVERY_CONFLICT: {
+      why: 'The customer says the parcel never arrived, but the carrier recorded it as delivered.',
+      check: 'Check the carrier scan or delivery photo, and contact the customer if needed.',
+    },
+    LOST_PARCEL: {
+      why: `The parcel is ${config.lostParcelGraceDays} or more days late.`,
+      check: 'Open a trace with the carrier; refund or reship if it is lost.',
+    },
+    FINAL_SALE_MERCHANT_FAULT: {
+      why: 'A final sale item was reported damaged or wrong. Final sale is normally not refundable, but not if it was our mistake.',
+      check: 'Ask for photos; approve if the damage or mistake was ours.',
+    },
+    LOW_CONFIDENCE: {
+      why: "The assistant wasn't sure it understood the request.",
+      check: 'Read the message and the conversation, then decide from the order facts.',
+    },
+    UNRESOLVED_CLARIFICATION: {
+      why: 'The request was still unclear after several questions.',
+      check: 'Read the conversation and reply to the customer or decide.',
+    },
+  };
+  return Object.fromEntries(
+    BUILT_IN_IDS.map((id, i) => [id, { id, ...defs[i]!, ...(hints[id] && { reviewerHint: hints[id] }) }]),
+  ) as Record<RuleId, RuleDefinition>;
 }
 
 /** Built-in rules for the default policy, for code paths that do not depend on a version. */
@@ -131,6 +177,10 @@ export function ruleCatalog(policy: ActivePolicy): Map<string, RuleDefinition> {
       title: r.name,
       effect: r.effect,
       customerText: r.customerText,
+      reviewerHint: {
+        why: `Your team's custom rule "${r.name}" applies. ${describeRule(r)}`,
+        check: 'Decide using the rule and the order facts.',
+      },
       custom: true,
     });
   });

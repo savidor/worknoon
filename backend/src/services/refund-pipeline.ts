@@ -39,7 +39,7 @@ import {
 } from '../repositories/crm.repo.js';
 import { findOpenEscalation, insertRequest } from '../repositories/request.repo.js';
 import { guardReply } from '../security/output-guard.js';
-import { sanitizeInput, scanForInjection } from '../security/input.js';
+import { describeSignal, sanitizeInput, scanForInjection } from '../security/input.js';
 import { getActivePolicy } from './policy.service.js';
 import { isActiveOrder, orderForAi, orderLabel, orderStatusLine } from './presenters.js';
 
@@ -167,7 +167,7 @@ export async function handleCustomerTurn(args: {
 
   const manipulation = [
     ...new Set([
-      ...(scan.flagged ? scan.matches.map((m) => `heuristic:${m}`) : []),
+      ...(scan.flagged ? scan.matches.map(describeSignal) : []),
       ...extraction.manipulationSignals,
     ]),
   ];
@@ -177,7 +177,7 @@ export async function handleCustomerTurn(args: {
       actor: 'system',
       type: 'security.manipulation_detected',
       severity: scan.flagged ? 'critical' : 'warning',
-      detail: { signals: manipulation, heuristicScore: scan.score, excerpt: text.slice(0, 280) },
+      detail: { signals: manipulation, evidence: scan.evidence, heuristicScore: scan.score, excerpt: text.slice(0, 280) },
     });
   }
 
