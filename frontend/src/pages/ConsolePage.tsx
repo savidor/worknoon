@@ -71,7 +71,7 @@ function Console({ onLogout }: { onLogout: () => void }) {
         <div className="ml-auto flex gap-2">
           <Button
             variant="secondary"
-            onClick={() => window.confirm('Reset all demo data? Cases and conversations will be deleted.') && reset.mutate()}
+            onClick={() => window.confirm('Reset demo data? Cases, conversations and policy changes are replaced with the original policy and a fresh week of sample activity.') && reset.mutate()}
             loading={reset.isPending}
           >
             <DatabaseZap className="size-4" aria-hidden /> Reset demo data

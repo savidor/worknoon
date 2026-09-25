@@ -36,7 +36,7 @@ const EXTRACTION_JSON_SCHEMA = toGeminiSchema(ExtractionWireSchema);
 const REPLY_JSON_SCHEMA = toGeminiSchema(ReplyWireSchema);
 
 /** Budget for one model attempt, so a slow model hands over quickly instead of stalling the chat. */
-const ATTEMPT_TIMEOUT_MS = 12_000;
+const ATTEMPT_TIMEOUT_MS = 8_000;
 const DEFAULT_COOLDOWN_MS = 30_000;
 /** A daily quota will not recover in seconds, whatever the retry hint says. */
 const DAILY_QUOTA_COOLDOWN_MS = 60 * 60_000;

@@ -7,7 +7,7 @@ import { SEED_CUSTOMERS } from './data.js';
 
 const ago = (now: number, days: number | undefined) => (days === undefined ? null : new Date(now - days * DAY_MS));
 
-async function insertOrder(
+export async function insertOrder(
   client: pg.PoolClient,
   customerId: string,
   now: number,
@@ -96,9 +96,4 @@ export async function reseed(): Promise<void> {
     }
   });
   logger.info({ customers: SEED_CUSTOMERS.length }, 'Seeded synthetic CRM data');
-}
-
-export async function seedIfEmpty(): Promise<void> {
-  const { rows } = await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM customers');
-  if ((rows[0]?.n ?? 0) === 0) await reseed();
 }

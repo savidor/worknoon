@@ -8,7 +8,7 @@ import { eventsForRequest, securityEvents } from '../repositories/audit.repo.js'
 import { listMessages } from '../repositories/conversation.repo.js';
 import { getOrderById, refundHistory } from '../repositories/crm.repo.js';
 import { getRequest, getStats, listRequests } from '../repositories/request.repo.js';
-import { reseed } from '../seed/seed.js';
+import { resetDemoData } from '../seed/demo.js';
 import { getActivePolicy } from '../services/policy.service.js';
 import { reviewRequest } from '../services/review.service.js';
 
@@ -84,8 +84,9 @@ adminRouter.get('/security-events', async (_req, res) => {
   res.json({ events: await securityEvents(50) });
 });
 
-adminRouter.post('/demo/reset', async (_req, res) => {
+adminRouter.post('/demo/reset', async (req, res) => {
   if (!env.DEMO_MODE) throw HttpError.notFound();
-  await reseed();
-  res.json({ ok: true });
+  const { sampleActivity } = z.object({ sampleActivity: z.boolean().default(true) }).parse(req.body ?? {});
+  await resetDemoData({ sampleActivity });
+  res.json({ ok: true, sampleActivity });
 });

@@ -30,6 +30,7 @@ services:
       DATABASE_URL: postgres://refunddesk:refunddesk@db:5432/refunddesk
       AUTO_MIGRATE: "true"
       SEED_ON_BOOT: "true"
+      SEED_SAMPLE_ACTIVITY: ${SEED_SAMPLE_ACTIVITY:-true}
       DEMO_MODE: ${DEMO_MODE:-true}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production-this-is-a-dev-only-secret}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-worknoon-admin}
@@ -38,7 +39,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS:-gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite}
-      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-15000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       db:

@@ -355,13 +355,19 @@ function DecisionCard({ message }: { message: Message }) {
 }
 
 function TypingIndicator() {
+  // Model calls usually take a few seconds; after that, reassure the customer instead of going quiet.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 8_000);
+    return () => clearTimeout(t);
+  }, []);
   return (
     <div className="flex items-center gap-2.5" role="status" aria-label="Assistant is reviewing your request">
       <div className="grid size-7 place-items-center rounded-full bg-brand-600 text-white" aria-hidden>
         <Sparkles className="size-3.5" />
       </div>
       <div className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-xs text-slate-500 shadow-sm ring-1 ring-slate-200">
-        Checking your order against our policy
+        {slow ? 'Still checking, thanks for your patience' : 'Checking your order against our policy'}
         <span className="flex gap-0.5" aria-hidden>
           <span className="typing-dot size-1 rounded-full bg-slate-400" />
           <span className="typing-dot size-1 rounded-full bg-slate-400" />

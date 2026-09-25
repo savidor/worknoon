@@ -4,7 +4,7 @@ import { env } from './config/env.js';
 import { migrate } from './db/migrate.js';
 import { pool } from './db/pool.js';
 import { logger } from './lib/logger.js';
-import { seedIfEmpty } from './seed/seed.js';
+import { seedDemoIfEmpty } from './seed/demo.js';
 import { ensureDefaultPolicy, getActivePolicy } from './services/policy.service.js';
 
 async function waitForDatabase(attempts = 30): Promise<void> {
@@ -26,7 +26,7 @@ async function main() {
   }
   await waitForDatabase();
   if (env.AUTO_MIGRATE) await migrate();
-  if (env.SEED_ON_BOOT) await seedIfEmpty();
+  if (env.SEED_ON_BOOT) await seedDemoIfEmpty();
   await ensureDefaultPolicy();
   const policy = await getActivePolicy();
 

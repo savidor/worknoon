@@ -52,8 +52,11 @@ publicRouter.get('/demo/customers', async (_req, res) => {
   if (!env.DEMO_MODE) throw HttpError.notFound();
   const customers = await listCustomers();
   const scenarios = new Map(SEED_CUSTOMERS.map((c) => [c.id, c.scenario]));
+  // Only the documented personas; background customers exist to populate the console.
   res.json({
-    customers: customers.map((c) => ({ id: c.id, name: c.name, email: c.email, tier: c.tier, scenario: scenarios.get(c.id) ?? null })),
+    customers: customers
+      .filter((c) => scenarios.has(c.id))
+      .map((c) => ({ id: c.id, name: c.name, email: c.email, tier: c.tier, scenario: scenarios.get(c.id) ?? null })),
   });
 });
 

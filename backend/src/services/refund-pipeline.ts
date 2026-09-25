@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { aiProvider, fallbackProvider } from '../ai/index.js';
+import { currentProvider, fallbackProvider } from '../ai/index.js';
 import { PROMPT_VERSION } from '../ai/prompts.js';
 import { templateReply } from '../ai/templates.js';
 import type { AiProvider, AiResult, AiUsage, ReplyContext, ReplyDraft } from '../ai/types.js';
@@ -64,29 +64,37 @@ async function runAi<T>(
   trace: TraceStep[],
   stage: string,
   fn: (p: AiProvider, signal: AbortSignal) => Promise<AiResult<T>>,
+  opts: { skipModel?: boolean } = {},
 ): Promise<AiCallOutcome<T>> {
   const t0 = performance.now();
+  const provider = currentProvider();
+  if (opts.skipModel && provider !== fallbackProvider) {
+    // The model already failed earlier in this turn; do not make the customer wait on it twice.
+    const res = await fn(fallbackProvider, new AbortController().signal);
+    trace.push({ stage, ms: Math.round(performance.now() - t0), status: 'fallback', note: `${provider.name} unavailable this turn, used ${fallbackProvider.name}` });
+    return { data: res.data, provider: fallbackProvider, fellBack: true };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.AI_TIMEOUT_MS);
   try {
-    const res = await fn(aiProvider, controller.signal);
+    const res = await fn(provider, controller.signal);
     trace.push({
       stage,
       ms: Math.round(performance.now() - t0),
       status: 'ok',
-      note: `${aiProvider.name}:${res.model ?? aiProvider.model}`,
+      note: `${provider.name}:${res.model ?? provider.model}`,
       data: { usage: res.usage },
     });
-    return { data: res.data, usage: res.usage, provider: aiProvider, fellBack: false };
+    return { data: res.data, usage: res.usage, provider, fellBack: false };
   } catch (err) {
     const error = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    logger.warn({ err, stage, provider: aiProvider.name }, 'AI step failed; using deterministic fallback');
+    logger.warn({ err, stage, provider: provider.name }, 'AI step failed; using deterministic fallback');
     const res = await fn(fallbackProvider, new AbortController().signal);
     trace.push({
       stage,
       ms: Math.round(performance.now() - t0),
       status: 'fallback',
-      note: `${aiProvider.name} failed, used ${fallbackProvider.name}`,
+      note: `${provider.name} failed, used ${fallbackProvider.name}`,
       data: { error },
     });
     return { data: res.data, provider: fallbackProvider, fellBack: true, error };
@@ -154,6 +162,7 @@ export async function handleCustomerTurn(args: {
     ),
   );
   const extraction = extractionCall.data;
+  const aiHealthy = !extractionCall.fellBack;
   trace.at(-1)!.data = { ...(trace.at(-1)!.data as object), extraction };
 
   const manipulation = [
@@ -223,7 +232,7 @@ export async function handleCustomerTurn(args: {
     const asked = extraction.intent === 'order_inquiry';
     const ownOrder = asked && order && order.customerId === customer.id ? order : null;
     return replyWithoutCase({
-      trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'INFO',
+      trace, audit, started, policy, aiHealthy, conversationId, customerMessage, extraction, outcome: 'INFO',
       ctx: {
         ...ctxBase,
         outcome: 'INFO',
@@ -247,7 +256,7 @@ export async function handleCustomerTurn(args: {
     const askedSinceLastCase = countClarifications(history);
     if (askedSinceLastCase >= policy.config.maxClarificationTurns) {
       return createCase({
-        trace, audit, started, policy, conversationId, customer, customerMessage, extraction, reason,
+        trace, audit, started, policy, aiHealthy, conversationId, customer, customerMessage, extraction, reason,
         order: order && order.customerId === customer.id ? order : null,
         evaluation: {
           decision: 'ESCALATED',
@@ -261,7 +270,7 @@ export async function handleCustomerTurn(args: {
       });
     }
     return replyWithoutCase({
-      trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'NEEDS_INFO',
+      trace, audit, started, policy, aiHealthy, conversationId, customerMessage, extraction, outcome: 'NEEDS_INFO',
       ctx: { ...ctxBase, outcome: 'NEEDS_INFO', orderNumber: order?.orderNumber ?? null, missingInfo: missing },
     });
   }
@@ -271,7 +280,7 @@ export async function handleCustomerTurn(args: {
     const open = await findOpenEscalation(order.id);
     if (open) {
       return replyWithoutCase({
-        trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'ESCALATED',
+        trace, audit, started, policy, aiHealthy, conversationId, customerMessage, extraction, outcome: 'ESCALATED',
         ctx: { ...ctxBase, outcome: 'ESCALATED', orderNumber: order.orderNumber, caseReference: open.reference, isDuplicate: true },
         metaExtra: { caseId: open.id, caseReference: open.reference },
       });
@@ -313,7 +322,7 @@ export async function handleCustomerTurn(args: {
 
     try {
       return await createCase({
-        trace, audit, started, policy, conversationId, customer, customerMessage, extraction, reason, evaluation,
+        trace, audit, started, policy, aiHealthy, conversationId, customer, customerMessage, extraction, reason, evaluation,
         order: snapshot.customerId === customer.id ? snapshot : null,
         requestedOrderNumber: snapshot.orderNumber,
         aiProviderUsed: extractionCall.provider,
@@ -352,8 +361,9 @@ async function draftGuardedReply(
   ctx: ReplyContext,
   allowedAmountsCents: number[],
   conversationId: string,
+  aiHealthy = true,
 ): Promise<{ draft: ReplyDraft; provider: AiProvider; usage?: AiUsage }> {
-  const call = await runAi(trace, 'ai_reply', (p, signal) => p.draftReply(ctx, signal));
+  const call = await runAi(trace, 'ai_reply', (p, signal) => p.draftReply(ctx, signal), { skipModel: !aiHealthy });
   const guard = guardReply(call.data.customerReply, {
     outcome: ctx.outcome,
     allowedAmountsCents,
@@ -394,6 +404,7 @@ async function replyWithoutCase(args: {
   audit: AuditEvent[];
   started: number;
   policy: ActivePolicy;
+  aiHealthy: boolean;
   conversationId: string;
   customerMessage: Message;
   extraction: Extraction;
@@ -402,7 +413,7 @@ async function replyWithoutCase(args: {
   metaExtra?: MessageMeta;
 }): Promise<TurnResult> {
   const ctx: ReplyContext = { ...emptyCtx, ...args.ctx };
-  const { draft } = await draftGuardedReply(args.trace, args.audit, ctx, [args.policy.config.humanReviewThresholdCents, ...amountsIn(ctx.reasons)], args.conversationId);
+  const { draft } = await draftGuardedReply(args.trace, args.audit, ctx, [args.policy.config.humanReviewThresholdCents, ...amountsIn(ctx.reasons)], args.conversationId, args.aiHealthy);
   const assistantMessage = await withTransaction(async (db) => {
     const msg = await addMessage(
       {
@@ -434,6 +445,7 @@ async function createCase(args: {
   audit: AuditEvent[];
   started: number;
   policy: ActivePolicy;
+  aiHealthy: boolean;
   conversationId: string;
   customer: Customer;
   customerMessage: Message;
@@ -480,7 +492,7 @@ async function createCase(args: {
     args.policy.config.humanReviewThresholdCents,
     ...amountsIn([...ctx.reasons, ...ctx.deniedItems.map((d) => d.reason)]),
   ];
-  const { draft, provider: replyProvider } = await draftGuardedReply(trace, audit, ctx, allowed, conversationId);
+  const { draft, provider: replyProvider } = await draftGuardedReply(trace, audit, ctx, allowed, conversationId, args.aiHealthy);
 
   const latencyMs = Math.round(performance.now() - args.started);
   const riskSeverity = evaluation.riskFlags.length > 0 ? 'warning' : 'info';

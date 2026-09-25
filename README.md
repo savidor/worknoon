@@ -47,7 +47,7 @@ Then open **http://localhost:8080**.
 
 **No API key is required.** Without one, the app runs in **offline mode**: keyword heuristics extract the request and templates write the replies. Every feature, decision, and security control works the same, so you can evaluate the whole product immediately. The header shows which mode is active.
 
-The database migrates and seeds itself on first boot. Use **Reset demo data** in the console to start fresh at any time.
+The database migrates and seeds itself on first boot, including **a week of sample activity** so the console is populated from the start: about 20 cases from background customers covering approvals, denials, specialist reviews, a cross-account attempt and prompt injections. They are produced by running real requests through the real pipeline (offline, no model quota) and moving their timestamps into the past. They are separate from the 15 demo personas below, so every persona's suggested prompts behave as documented. Use **Reset demo data** in the console to start fresh at any time.
 
 ## Enabling the AI model
 
@@ -72,7 +72,8 @@ GEMINI_API_KEY=your-key
 | `GEMINI_MODEL` | `gemini-3.5-flash` | Primary model. Any Gemini model with JSON-schema output. |
 | `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite` | Comma-separated models tried in order when the primary is rate limited or overloaded. |
 | `AI_PROVIDER` | `gemini` | Set to `mock` to force offline mode even when a key is present. |
-| `AI_TIMEOUT_MS` | `30000` | Hard timeout per AI call before falling back. |
+| `AI_TIMEOUT_MS` | `15000` | Hard timeout per AI step before falling back. |
+| `SEED_SAMPLE_ACTIVITY` | `true` | Fill the console with a week of sample activity on first boot. |
 | `ADMIN_PASSWORD` | `worknoon-admin` | Support console password. |
 | `JWT_SECRET` | dev value | Signs session tokens. Set a random value outside local review. |
 | `DEMO_MODE` | `true` | Enables the demo customer switcher and data reset. |
@@ -227,7 +228,7 @@ The engine takes the active policy as a parameter (thresholds plus custom rules)
 
 `AiProvider` has two methods, `extract` and `draftReply`, and two implementations that share the same prompts and schemas:
 
-- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), each attempt has a 12 second budget, and a per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent) so customers never wait on a model that is known to be down. The case trace records which model answered.
+- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), each attempt has an 8 second budget, and if the model fails while reading a message, the reply for that message comes straight from a template instead of waiting on the model again, and a per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent) so customers never wait on a model that is known to be down. The case trace records which model answered.
 - **Offline**: keyword heuristics and templates. It is the default when no key is set, and the **automatic fallback** when the model times out, errors, is blocked, or returns unparseable output. The fallback is recorded in the case trace, so degraded decisions stay visible.
 
 The customer is never left without an answer, and the decision is identical either way, because it never depended on the model. The interface also keeps the model swappable: moving to another vendor means one new adapter, with no change to the pipeline, engine, or security layers.

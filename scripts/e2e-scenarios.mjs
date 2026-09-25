@@ -91,7 +91,7 @@ async function main() {
 
   const admin = (await call('POST', '/auth/admin/login', { body: { username: 'e2e', password: ADMIN_PASSWORD } })).json.token;
   check('admin can sign in', !!admin);
-  await call('POST', '/admin/demo/reset', { token: admin });
+  await call('POST', '/admin/demo/reset', { token: admin, body: { sampleActivity: false } });
 
   console.log('\nScenarios');
   const cases = {};
@@ -155,7 +155,7 @@ async function main() {
   check('dashboard stats reflect the run', stats.json.total >= 15 && stats.json.flagged > 0, JSON.stringify(stats.json).slice(0, 200));
 
   console.log('\nReliability');
-  await call('POST', '/admin/demo/reset', { token: admin });
+  await call('POST', '/admin/demo/reset', { token: admin, body: { sampleActivity: false } });
   const racer = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_05' } })).json.token;
   const convs = await Promise.all([1, 2, 3].map(() => call('POST', '/conversations', { token: racer })));
   const raced = await Promise.all(
@@ -172,7 +172,7 @@ async function main() {
   );
 
   console.log('\nPolicy studio');
-  await call('POST', '/admin/demo/reset', { token: admin });
+  await call('POST', '/admin/demo/reset', { token: admin, body: { sampleActivity: false } });
   const studio = await call('GET', '/admin/policy', { token: admin });
   check('studio loads the active policy and catalogue', studio.status === 200 && studio.json.active.version.endsWith('-r1') && studio.json.catalog.orders.length >= 15);
   const homeRule = {
@@ -209,7 +209,17 @@ async function main() {
   check('an earlier version can be restored', rollback.status === 200 && rollback.json.version.isActive);
   const grace = await say(await customerSession('cus_11'), 'Return the yoga mat and sunglasses from WN-10011, changed my mind, unused.');
   check('decisions follow the restored version', grace.outcome === 'APPROVED');
+  await call('POST', '/admin/demo/reset', { token: admin, body: { sampleActivity: false } });
+
+  console.log('\nSample activity');
   await call('POST', '/admin/demo/reset', { token: admin });
+  const week = (await call('GET', '/admin/stats', { token: admin })).json;
+  const activeDays = week.daily.filter((d) => d.approved + d.denied + d.escalated > 0).length;
+  check('a reset fills the console with a week of real pipeline activity', week.total === 20 && week.human_reviewed === 4 && week.flagged >= 3 && activeDays >= 5, JSON.stringify({ total: week.total, reviewed: week.human_reviewed, flagged: week.flagged, activeDays }));
+  const picker = (await call('GET', '/demo/customers')).json.customers;
+  check('background customers stay out of the demo picker', picker.length === 15);
+  const amara = await say(await customerSession('cus_01'), 'My AuraSound headphones from order WN-10001 arrived with a cracked headband.');
+  check('persona scenarios still behave as documented after sample activity', amara.outcome === 'APPROVED');
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);

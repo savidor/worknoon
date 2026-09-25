@@ -12,6 +12,8 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().url().default('postgres://refunddesk:refunddesk@localhost:5432/refunddesk'),
   AUTO_MIGRATE: bool.default(true),
   SEED_ON_BOOT: bool.default(true),
+  // Adds a week of realistic background activity so the console is populated on first run.
+  SEED_SAMPLE_ACTIVITY: bool.default(true),
 
   // Demo mode exposes the customer switcher and the reset endpoint. Never enable in production.
   DEMO_MODE: bool.default(true),
@@ -26,7 +28,7 @@ const EnvSchema = z.object({
   GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
   // Tried in order when the primary model is rate limited or overloaded (separate free-tier quotas).
   GEMINI_FALLBACK_MODELS: z.string().default('gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite'),
-  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

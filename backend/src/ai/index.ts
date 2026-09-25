@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { GeminiProvider } from './providers/gemini.js';
@@ -18,3 +19,17 @@ function createProvider(): AiProvider {
 
 export const aiProvider: AiProvider = createProvider();
 export const fallbackProvider: AiProvider = aiProvider.name === 'mock' ? aiProvider : new MockProvider();
+
+/**
+ * Lets a unit of work run against a specific provider without touching live traffic,
+ * for example generating sample activity offline so it never spends model quota.
+ */
+const override = new AsyncLocalStorage<AiProvider>();
+
+export function currentProvider(): AiProvider {
+  return override.getStore() ?? aiProvider;
+}
+
+export function withProvider<T>(provider: AiProvider, fn: () => Promise<T>): Promise<T> {
+  return override.run(provider, fn);
+}
