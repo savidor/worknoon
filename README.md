@@ -71,10 +71,11 @@ GEMINI_API_KEY=your-key
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | | Enables Gemini. Without it the app runs in offline mode. |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | Primary model. Any Gemini model with JSON-schema output. |
-| `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite` | Comma-separated models tried in order when the primary is rate limited or overloaded. |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Primary model, chosen for speed (about 1 second per call). Any Gemini model with JSON-schema output. |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview,gemini-3.5-flash,gemini-3.1-flash-lite` | Comma-separated models tried in order when the primary is rate limited or overloaded. |
 | `AI_PROVIDER` | `gemini` | Set to `mock` to force offline mode even when a key is present. |
-| `AI_TIMEOUT_MS` | `15000` | Hard timeout per AI step before falling back. |
+| `AI_TIMEOUT_MS` | `8000` | Time allowed to understand a message before the offline reader takes over. |
+| `AI_REPLY_BUDGET_MS` | `2500` | Time allowed for the model to word the reply; after that the template reply is sent at once. |
 | `SEED_SAMPLE_ACTIVITY` | `true` | Fill the console with a week of sample activity on first boot. |
 | `ADMIN_PASSWORD` | `worknoon-admin` | Support console password. |
 | `JWT_SECRET` | dev value | Signs session tokens. Set a random value outside local review. |
@@ -234,7 +235,9 @@ The engine takes the active policy as a parameter (thresholds plus custom rules)
 
 `AiProvider` has two methods, `extract` and `draftReply`, and two implementations that share the same prompts and schemas:
 
-- **Gemini** (`gemini-3.5-flash` by default): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Requests move down a model chain on quota or capacity errors (each model has its own quota), and each attempt has an 8 second budget. A per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent), so customers never wait on a model that is known to be down. If the model fails while reading a message, the reply for that message comes straight from a template rather than waiting on the model a second time; with the model fully down, a customer still gets a correct answer in about 2 seconds. The case trace records which model answered.
+- **Gemini** (`gemini-3.5-flash-lite` by default, chosen for speed): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Thinking is set to minimal and prompts are compact, because classifying a message and wording a short reply need no extended reasoning. Requests move down a model chain on quota or capacity errors (each model has its own quota), and each attempt has an 8 second budget. A per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent), so customers never wait on a model that is known to be down. If the model fails while reading a message, the reply for that message comes straight from a template rather than waiting on the model a second time; with the model fully down, a customer still gets a correct answer in about 2 seconds. The reply has its own 2.5 second budget: if the model has not worded it by then, the template reply is sent at once. The case trace records which model answered.
+
+**Speed.** Measured on a modest 8 GB laptop: a message answered by Gemini takes about 2.5 to 4.5 seconds end to end; screens are usable in under 1.3 seconds on first visit and about 0.4 seconds afterwards; opening a case takes about 0.1 seconds because it is preloaded on hover. The chat reuses data the server already returned instead of refetching, API connections are kept warm, and routine polling is not logged.
 - **Offline**: keyword heuristics and templates. It is the default when no key is set, and the **automatic fallback** when the model times out, errors, is blocked, or returns unparseable output. The fallback is recorded in the case trace, so degraded decisions stay visible.
 
 The customer is never left without an answer, and the decision is identical either way, because it never depended on the model. The interface also keeps the model swappable: moving to another vendor means one new adapter, with no change to the pipeline, engine, or security layers.
@@ -334,7 +337,7 @@ docker-compose up -d --build --wait
 node scripts/e2e-scenarios.mjs
 ```
 
-- **94 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), brand-aware detection of items the customer does not own, the evidence recorded for security signals, and tests that the rendered policy page matches the engine for any version.
+- **97 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), brand-aware detection of items the customer does not own, the evidence recorded for security signals, and tests that the rendered policy page matches the engine for any version.
 - **52 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, greetings answered without volunteering order details, items the customer does not own (ask, accept a correction, escalate if they insist), refund history behind the frequency rule, the populated sample week, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
@@ -352,7 +355,7 @@ The model path was also tested against a stubbed model that deliberately returns
 - **Item-level refunds, whole quantities.** A line is refunded in full. Partial quantities would be a small extension.
 - **"Change of mind" relies on the customer's statement** that an item is unused. In production the refund would be issued on receipt of the return.
 - **Refunds are recorded, not paid.** Approvals write to a `refunds` ledger in the same transaction as the decision. A real system would hand these to the payment provider through an outbox for exactly-once delivery.
-- **Two model calls per message** (extract, then reply) rather than one. It costs a little latency and free-tier quota, but keeps the decision strictly between them, so the reply is written for a decision that already exists.
+- **Two model calls per message** (extract, then reply) rather than one. It costs a little latency and free-tier quota, but keeps the decision strictly between them, so the reply is written for a decision that already exists. The reply call is time-boxed, so it never adds more than 2.5 seconds.
 - **Plain SQL over an ORM.** The schema is small, and explicit SQL with a tiny forward-only migrator keeps the data layer transparent for review.
 - **Polling, not websockets,** for specialist updates in the chat. Simple and adequate at this scale.
 - **Offline mode is deliberately modest.** It exists so the product always runs and always answers; the real model is noticeably better at reading unusual phrasing.

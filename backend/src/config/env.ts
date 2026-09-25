@@ -25,10 +25,13 @@ const EnvSchema = z.object({
   // "gemini" uses the model when GEMINI_API_KEY is set; "mock" forces offline mode.
   AI_PROVIDER: z.enum(['gemini', 'mock']).default('gemini'),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash-lite'),
   // Tried in order when the primary model is rate limited or overloaded (separate free-tier quotas).
-  GEMINI_FALLBACK_MODELS: z.string().default('gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite'),
-  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  GEMINI_FALLBACK_MODELS: z.string().default('gemini-3-flash-preview,gemini-3.5-flash,gemini-3.1-flash-lite'),
+  // Time allowed to understand a message before falling back to the offline reader.
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+  // Time allowed for the model to word the reply; after that the template reply is sent at once.
+  AI_REPLY_BUDGET_MS: z.coerce.number().int().positive().default(2_500),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -1,4 +1,4 @@
-import { ApiError, GoogleGenAI } from '@google/genai';
+import { ApiError, GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { z } from 'zod';
 import type { Extraction } from '../../domain/types.js';
 import { nonce } from '../../lib/ids.js';
@@ -84,6 +84,8 @@ export class GeminiProvider implements AiProvider {
   readonly model: string;
   private readonly client: GoogleGenAI;
   private readonly circuit = new ModelCircuit();
+  /** Models that rejected the thinking setting; they are called without it from then on. */
+  private readonly noThinkingConfig = new Set<string>();
 
   constructor(
     apiKey: string,
@@ -91,7 +93,9 @@ export class GeminiProvider implements AiProvider {
   ) {
     if (models.length === 0) throw new Error('At least one Gemini model is required');
     this.model = models[0]!;
-    this.client = new GoogleGenAI({ apiKey, httpOptions: { timeout: ATTEMPT_TIMEOUT_MS } });
+    // No httpOptions.timeout: the SDK forwards it to Google as a server deadline, and deadlines
+    // under 10s are rejected outright. Each attempt is bounded by an AbortSignal instead.
+    this.client = new GoogleGenAI({ apiKey });
   }
 
   async extract(ctx: ExtractionContext, signal: AbortSignal): Promise<AiResult<Extraction>> {
@@ -131,6 +135,8 @@ export class GeminiProvider implements AiProvider {
         return { ...(await this.generate(model, system, user, schema, jsonSchema, signal)), model };
       } catch (err) {
         lastError = err;
+        // Our own time budget ran out: that is not the model's fault, so do not pause it.
+        if (signal.aborted) throw err;
         if (!isTransient(err)) throw err;
         this.circuit.trip(model, err);
       }
@@ -146,17 +152,28 @@ export class GeminiProvider implements AiProvider {
     jsonSchema: unknown,
     signal: AbortSignal,
   ): Promise<{ parsed: z.infer<S>; usage: AiUsage }> {
-    const response = await this.client.models.generateContent({
-      model,
-      contents: user,
-      config: {
-        systemInstruction: system,
-        responseMimeType: 'application/json',
-        responseJsonSchema: jsonSchema,
-        temperature: 0.2,
-        abortSignal: AbortSignal.any([signal, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]),
-      },
-    });
+    const request = (withThinking: boolean) =>
+      this.client.models.generateContent({
+        model,
+        contents: user,
+        config: {
+          systemInstruction: system,
+          responseMimeType: 'application/json',
+          responseJsonSchema: jsonSchema,
+          temperature: 0.2,
+          // Classification and short replies need no extended reasoning; it only adds seconds.
+          ...(withThinking && { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }),
+          abortSignal: AbortSignal.any([signal, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]),
+        },
+      });
+    let response;
+    try {
+      response = await request(!this.noThinkingConfig.has(model));
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 400 && /thinking/i.test(err.message))) throw err;
+      this.noThinkingConfig.add(model);
+      response = await request(false);
+    }
 
     if (response.promptFeedback?.blockReason) throw new AiRefusalError(`Blocked: ${response.promptFeedback.blockReason}`);
     const finish = response.candidates?.[0]?.finishReason;

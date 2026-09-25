@@ -41,7 +41,7 @@ export function buildExtractionUser(ctx: ExtractionContext, id: string): string 
   return `<context>
 Customer first name: ${ctx.customerFirstName}
 Customer's orders (authoritative, from our database):
-${JSON.stringify(ctx.orders, null, 2)}
+${JSON.stringify(ctx.orders)}
 </context>
 
 <conversation_so_far>
@@ -79,7 +79,7 @@ export function buildReplyUser(ctx: ReplyContext): string {
   const { customerMessage, ...facts } = ctx;
   const message = customerMessage.replaceAll('<', '‹').replaceAll('>', '›');
   return `<facts>
-${JSON.stringify(facts, null, 2)}
+${JSON.stringify(facts)}
 </facts>
 
 <customer_message_for_tone_only>

@@ -64,7 +64,7 @@ async function runAi<T>(
   trace: TraceStep[],
   stage: string,
   fn: (p: AiProvider, signal: AbortSignal) => Promise<AiResult<T>>,
-  opts: { skipModel?: boolean } = {},
+  opts: { skipModel?: boolean; budgetMs?: number } = {},
 ): Promise<AiCallOutcome<T>> {
   const t0 = performance.now();
   const provider = currentProvider();
@@ -75,7 +75,7 @@ async function runAi<T>(
     return { data: res.data, provider: fallbackProvider, fellBack: true };
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), env.AI_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), opts.budgetMs ?? env.AI_TIMEOUT_MS);
   try {
     const res = await fn(provider, controller.signal);
     trace.push({
@@ -399,7 +399,10 @@ async function draftGuardedReply(
   conversationId: string,
   aiHealthy = true,
 ): Promise<{ draft: ReplyDraft; provider: AiProvider; usage?: AiUsage }> {
-  const call = await runAi(trace, 'ai_reply', (p, signal) => p.draftReply(ctx, signal), { skipModel: !aiHealthy });
+  const call = await runAi(trace, 'ai_reply', (p, signal) => p.draftReply(ctx, signal), {
+    skipModel: !aiHealthy,
+    budgetMs: env.AI_REPLY_BUDGET_MS,
+  });
   const guard = guardReply(call.data.customerReply, {
     outcome: ctx.outcome,
     allowedAmountsCents,

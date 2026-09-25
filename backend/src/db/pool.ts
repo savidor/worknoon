@@ -8,7 +8,8 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v));
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   max: 10,
-  idleTimeoutMillis: 30_000,
+  // Keep connections open: re-authenticating a new connection costs far more than an idle one.
+  idleTimeoutMillis: 0,
 });
 
 pool.on('error', (err) => logger.error({ err }, 'Unexpected idle Postgres client error'));

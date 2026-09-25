@@ -29,7 +29,8 @@ export function ChatPage() {
   const demo = useQuery({ queryKey: ['demo-customers'], queryFn: () => api<{ customers: DemoCustomer[] }>('/demo/customers') });
 
   const login = useMutation({
-    mutationFn: (id: string) => api<{ token: string }>('/auth/customer/demo-login', { method: 'POST', body: { customerId: id } }),
+    mutationFn: (id: string) =>
+      api<{ token: string; customer: Customer; orders: Order[] }>('/auth/customer/demo-login', { method: 'POST', body: { customerId: id } }),
     onSuccess: (res, id) => {
       tokens.set('customer', res.token);
       try {
@@ -38,8 +39,9 @@ export function ChatPage() {
         /* optional */
       }
       setConversationId(null);
+      // Sign-in already returns the profile and orders: use them instead of fetching again.
+      qc.setQueryData(['me', id], { customer: res.customer, orders: res.orders });
       setCustomerId(id);
-      qc.removeQueries({ queryKey: ['me'] });
     },
   });
 
@@ -57,7 +59,12 @@ export function ChatPage() {
 
   const current = useQuery({
     queryKey: ['conversation-current', customerId],
-    queryFn: () => api<{ id: string; messages: Message[] }>('/conversations/current', { role: 'customer' }),
+    queryFn: async () => {
+      const data = await api<{ id: string; messages: Message[] }>('/conversations/current', { role: 'customer' });
+      // The response already contains the messages: seed them so the chat renders without a second request.
+      qc.setQueryData(['messages', data.id], { messages: data.messages });
+      return data;
+    },
     enabled: !!customerId && !conversationId,
   });
   const activeConversation = conversationId ?? current.data?.id ?? null;
@@ -72,17 +79,29 @@ export function ChatPage() {
 
   const send = useMutation({
     mutationFn: (content: string) =>
-      api(`/conversations/${activeConversation}/messages`, { method: 'POST', body: { content }, role: 'customer' }),
+      api<{ customerMessage: Message; assistantMessage: Message }>(`/conversations/${activeConversation}/messages`, {
+        method: 'POST',
+        body: { content },
+        role: 'customer',
+      }),
     onMutate: (content) => {
       const saved = qc.getQueryData<{ messages: Message[] }>(['messages', activeConversation]);
       setPending({ content, baseCount: saved?.messages.length ?? 0 });
     },
     // Never lose what the customer typed: put it back so they can retry.
     onError: (_err, content) => setDraft((d) => d || content),
-    onSettled: async () => {
-      await qc.invalidateQueries({ queryKey: ['messages', activeConversation] });
-      await qc.invalidateQueries({ queryKey: ['me', customerId] });
+    // Show the reply the moment it arrives: the response contains both messages, so there is
+    // no need to wait for a refetch. Orders refresh in the background (refund badges).
+    onSuccess: (res) => {
+      qc.setQueryData<{ messages: Message[] }>(['messages', activeConversation], (old) => {
+        const list = old?.messages ?? [];
+        const seen = new Set(list.map((m) => m.id));
+        return { messages: [...list, ...[res.customerMessage, res.assistantMessage].filter((m) => !seen.has(m.id))] };
+      });
+    },
+    onSettled: () => {
       setPending(null);
+      void qc.invalidateQueries({ queryKey: ['me', customerId] });
     },
   });
 

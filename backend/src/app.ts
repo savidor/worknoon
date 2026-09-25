@@ -24,7 +24,9 @@ export function createApp() {
         res.setHeader('x-request-id', id);
         return id;
       },
-      autoLogging: { ignore: (req) => req.url === '/api/health' },
+      // Polling reads happen every few seconds; logging each one is noise and disk I/O.
+      // Writes are always logged, and errors are logged by the error handler.
+      autoLogging: { ignore: (req) => req.method === 'GET' },
     }),
   );
   app.use(helmet());

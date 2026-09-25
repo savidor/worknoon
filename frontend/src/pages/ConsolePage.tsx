@@ -155,6 +155,8 @@ function Console({ onLogout }: { onLogout: () => void }) {
                     <tr
                       key={r.id}
                       onClick={() => setOpenId(r.id)}
+                      // Start loading the case while the pointer is on its way, so the drawer opens with data.
+                      onMouseEnter={() => void qc.prefetchQuery({ queryKey: ['request', r.id], queryFn: () => api(`/admin/requests/${r.id}`, { role: 'admin' }), staleTime: 10_000 })}
                       onKeyDown={(e) => e.key === 'Enter' && setOpenId(r.id)}
                       tabIndex={0}
                       className={cx('cursor-pointer transition hover:bg-slate-50 focus:bg-brand-50 focus:outline-none', openId === r.id && 'bg-brand-50/60')}

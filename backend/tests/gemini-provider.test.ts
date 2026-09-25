@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { generateContent } = vi.hoisted(() => ({ generateContent: vi.fn() }));
+const { generateContent, constructed } = vi.hoisted(() => ({ generateContent: vi.fn(), constructed: [] as unknown[] }));
 
 vi.mock('@google/genai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@google/genai')>();
   return {
     ...actual,
-    GoogleGenAI: vi.fn(function GoogleGenAI() {
+    GoogleGenAI: vi.fn(function GoogleGenAI(options: unknown) {
+      constructed.push(options);
       return { models: { generateContent } };
     }),
   };
@@ -108,6 +109,38 @@ describe('Gemini provider resilience', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not pause a model when our own time budget cancels the call', async () => {
+    generateContent.mockImplementation((req: { config: { abortSignal: AbortSignal } }) =>
+      new Promise((_resolve, reject) => req.config.abortSignal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))),
+    );
+    const provider = new GeminiProvider('key', ['primary', 'backup']);
+    const budget = new AbortController();
+    const pending = provider.draftReply(ctx, budget.signal).catch((e: Error) => e);
+    budget.abort();
+    expect((await pending) instanceof Error).toBe(true);
+    generateContent.mockReset();
+    generateContent.mockResolvedValueOnce(reply);
+    expect((await provider.draftReply(ctx, signal)).model).toBe('primary');
+  });
+
+  it('never sends Google a request deadline (it rejects deadlines under 10s)', () => {
+    new GeminiProvider('key', ['primary']);
+    const options = constructed.at(-1) as { httpOptions?: { timeout?: number } };
+    expect(options.httpOptions?.timeout).toBeUndefined();
+  });
+
+  it('asks for minimal thinking, and retries without it if a model rejects the setting', async () => {
+    const rejectThinking = () => Promise.reject(new ApiError({ message: 'thinking_level is not supported for this model', status: 400 }));
+    generateContent.mockImplementationOnce(rejectThinking).mockResolvedValueOnce(reply).mockResolvedValueOnce(reply);
+    const provider = new GeminiProvider('key', ['primary']);
+    expect((await provider.draftReply(ctx, signal)).model).toBe('primary');
+    const cfg = (i: number) => (generateContent.mock.calls[i]![0] as { config: { thinkingConfig?: unknown } }).config.thinkingConfig;
+    expect(cfg(0)).toEqual({ thinkingLevel: 'MINIMAL' });
+    expect(cfg(1)).toBeUndefined();
+    await provider.draftReply(ctx, signal);
+    expect(cfg(2)).toBeUndefined(); // remembered for that model
   });
 
   it('does not try other models on a non-transient error', async () => {
