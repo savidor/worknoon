@@ -61,12 +61,12 @@ export async function getConversation(id: string): Promise<{ id: string; custome
   return rows[0] ? { id: rows[0].id, customerId: rows[0].customer_id } : null;
 }
 
-export async function latestConversationFor(customerId: string): Promise<string | null> {
-  const { rows } = await pool.query<{ id: string }>(
-    'SELECT id FROM conversations WHERE customer_id = $1 ORDER BY updated_at DESC LIMIT 1',
+export async function latestConversationFor(customerId: string): Promise<{ id: string; updatedAt: Date } | null> {
+  const { rows } = await pool.query<{ id: string; updated_at: Date }>(
+    'SELECT id, updated_at FROM conversations WHERE customer_id = $1 ORDER BY updated_at DESC LIMIT 1',
     [customerId],
   );
-  return rows[0]?.id ?? null;
+  return rows[0] ? { id: rows[0].id, updatedAt: rows[0].updated_at } : null;
 }
 
 export async function listMessages(conversationId: string, limit = 200): Promise<Message[]> {
@@ -99,14 +99,14 @@ export interface ConversationSummary {
   preview: string | null;
   messageCount: number;
   /** Customer-safe view of each decision: never risk flags, rule ids or internal notes. */
-  cases: Array<{ reference: string; status: string; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
+  cases: Array<{ reference: string | null; status: string; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
 }
 
 /** A customer's earlier enquiries, newest first. Conversations with no messages are left out. */
 export async function listConversationsFor(customerId: string, limit = 20): Promise<ConversationSummary[]> {
   const { rows } = await pool.query(
     `SELECT c.id, c.created_at, c.updated_at, first.content AS preview, counts.n AS message_count,
-            COALESCE(cases.list, '[]') AS cases
+            COALESCE(cases.list::jsonb, '[]'::jsonb) || COALESCE(team_refunds.list::jsonb, '[]'::jsonb) AS cases
      FROM conversations c
      CROSS JOIN LATERAL (SELECT count(*)::int AS n FROM messages m WHERE m.conversation_id = c.id) counts
      LEFT JOIN LATERAL (
@@ -123,6 +123,15 @@ export async function listConversationsFor(customerId: string, limit = 20): Prom
        FROM refund_requests r LEFT JOIN orders o ON o.id = r.order_id
        WHERE r.conversation_id = c.id
      ) cases ON true
+     -- Refunds the support team made before RefundDesk have no case, only a ledger entry.
+     LEFT JOIN LATERAL (
+       SELECT json_agg(json_build_object(
+                'reference', NULL, 'status', 'APPROVED', 'amountCents', f.amount_cents,
+                'orderNumber', o.order_number, 'reviewed', true
+              ) ORDER BY f.created_at) AS list
+       FROM refunds f JOIN orders o ON o.id = f.order_id
+       WHERE f.conversation_id = c.id AND f.request_id IS NULL
+     ) team_refunds ON true
      WHERE c.customer_id = $1 AND counts.n > 0
      ORDER BY c.updated_at DESC
      LIMIT $2`,

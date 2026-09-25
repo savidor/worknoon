@@ -14,6 +14,12 @@ export interface SeedItem {
   refunded?: boolean;
 }
 
+/** The support conversation behind a refund made before RefundDesk: what the customer said, and the team's reply. */
+export interface RefundStory {
+  customer: string;
+  reply: string;
+}
+
 export interface SeedOrder {
   number: string;
   status: 'processing' | 'shipped' | 'delivered' | 'cancelled';
@@ -23,6 +29,8 @@ export interface SeedOrder {
   /** Negative means in the future. */
   expectedDeliveryDaysAgo?: number;
   items: SeedItem[];
+  /** For orders seeded as already refunded: the conversation that led to it. */
+  refundStory?: RefundStory;
 }
 
 export interface SeedCustomer {
@@ -32,9 +40,8 @@ export interface SeedCustomer {
   tier: 'standard' | 'silver' | 'gold';
   flags?: string[];
   memberSinceDaysAgo: number;
-  /** Past refunds (days ago, cents) for the frequency rule. */
-  /** Refunds made before RefundDesk existed, each on its own earlier order. */
-  pastRefunds?: Array<{ daysAgo: number; cents: number; name: string; category: string }>;
+  /** Refunds made before RefundDesk existed, each on its own earlier order, with the conversation behind it. */
+  pastRefunds?: Array<{ daysAgo: number; cents: number; name: string; category: string; story: RefundStory }>;
   orders: SeedOrder[];
   scenario: { title: string; expected: 'APPROVED' | 'DENIED' | 'ESCALATED' | 'NEEDS_INFO'; prompts: string[] };
 }
@@ -160,10 +167,46 @@ export const SEED_CUSTOMERS: SeedCustomer[] = [
     tier: 'standard',
     memberSinceDaysAgo: 150,
     pastRefunds: [
-      { daysAgo: 12, cents: 6_500, name: 'Coastline Linen Shirt', category: 'apparel' },
-      { daysAgo: 31, cents: 11_000, name: 'TrailGrip Hiking Boots', category: 'footwear' },
-      { daysAgo: 55, cents: 4_900, name: 'Bamboo Yoga Mat', category: 'sports' },
-      { daysAgo: 80, cents: 8_800, name: 'Nordic Wool Throw Blanket', category: 'home' },
+      {
+        daysAgo: 12,
+        cents: 6_500,
+        name: 'Coastline Linen Shirt',
+        category: 'apparel',
+        story: {
+          customer: 'Hi, the seams on the Coastline Linen Shirt from WN-09061 came apart after the first wash. Can I get a refund?',
+          reply: "I'm sorry about that, Noah. That shouldn't happen after one wash. I've refunded $65.00 to your original payment method, and it usually arrives within 3 to 5 business days. There's no need to send the shirt back.",
+        },
+      },
+      {
+        daysAgo: 31,
+        cents: 11_000,
+        name: 'TrailGrip Hiking Boots',
+        category: 'footwear',
+        story: {
+          customer: "The TrailGrip Hiking Boots from WN-09062 are a full size smaller than the size chart says. I'd like to return them.",
+          reply: "Thanks for letting us know, Noah. I've emailed you a free return label and refunded $110.00 to your original payment method.",
+        },
+      },
+      {
+        daysAgo: 55,
+        cents: 4_900,
+        name: 'Bamboo Yoga Mat',
+        category: 'sports',
+        story: {
+          customer: 'My Bamboo Yoga Mat (WN-09063) arrived with a tear along one edge.',
+          reply: "Sorry to hear that, Noah. I've refunded $49.00 to your original payment method. You're welcome to keep or recycle the mat.",
+        },
+      },
+      {
+        daysAgo: 80,
+        cents: 8_800,
+        name: 'Nordic Wool Throw Blanket',
+        category: 'home',
+        story: {
+          customer: "The Nordic Wool Throw Blanket from WN-09064 is grey, not the cream colour in the photos. Can I return it?",
+          reply: "Of course, Noah. I've refunded $88.00 to your original payment method and emailed you a return label.",
+        },
+      },
     ],
     orders: [
       {
@@ -239,6 +282,10 @@ export const SEED_CUSTOMERS: SeedCustomer[] = [
         shippedDaysAgo: 17,
         deliveredDaysAgo: 12,
         items: [{ sku: 'BAG-TT-77', name: 'Leather Tote Bag', category: 'accessories', priceCents: 22_000, refunded: true }],
+        refundStory: {
+          customer: 'Hi, the strap on the Leather Tote Bag from WN-10009 tore off on the first day I used it.',
+          reply: "I'm so sorry, Fatima. I've refunded $220.00 to your original payment method, and you'll see it within 3 to 5 business days.",
+        },
       },
     ],
     scenario: {

@@ -60,10 +60,10 @@ export function EnquiryHistory({
                       </span>
                       {c.cases.length > 0 && (
                         <span className="mt-1.5 flex flex-wrap gap-1">
-                          {c.cases.map((k) => {
+                          {c.cases.map((k, i) => {
                             const l = caseLabel(k);
                             return (
-                              <span key={k.reference} className={cx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset', l.tone)}>
+                              <span key={`${k.reference ?? k.orderNumber}-${i}`} className={cx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset', l.tone)}>
                                 {l.text}
                                 {k.orderNumber && <span className="font-normal opacity-70">· {k.orderNumber}</span>}
                               </span>

@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import { pool, withTransaction } from '../db/pool.js';
 import { DAY_MS } from '../lib/money.js';
 import { logger } from '../lib/logger.js';
 import { resetPolicies } from '../services/policy.service.js';
-import { SEED_CUSTOMERS } from './data.js';
+import { SEED_CUSTOMERS, type RefundStory } from './data.js';
 
 const ago = (now: number, days: number | undefined) => (days === undefined ? null : new Date(now - days * DAY_MS));
 
@@ -57,6 +58,26 @@ export async function insertOrder(
 }
 
 /** Wipes all data and loads the synthetic dataset. Safe to run repeatedly. */
+/**
+ * Writes the support conversation behind a refund made before RefundDesk: the customer's message
+ * a day before the refund, and the support team's reply at the moment it was issued.
+ */
+async function seedSupportConversation(
+  client: pg.PoolClient,
+  customerId: string,
+  story: RefundStory,
+  refundedAt: Date,
+): Promise<string> {
+  const id = `cnv_${randomUUID()}`;
+  const askedAt = new Date(refundedAt.getTime() - 22 * 3_600_000);
+  await client.query('INSERT INTO conversations (id, customer_id, created_at, updated_at) VALUES ($1,$2,$3,$4)', [id, customerId, askedAt, refundedAt]);
+  await client.query(
+    `INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'customer',$3,$4), ($5,$2,'agent',$6,$7)`,
+    [`msg_${randomUUID()}`, id, story.customer, askedAt, `msg_${randomUUID()}`, story.reply, refundedAt],
+  );
+  return id;
+}
+
 export async function reseed(): Promise<void> {
   const now = Date.now();
   await withTransaction(async (client) => {
@@ -75,9 +96,11 @@ export async function reseed(): Promise<void> {
       for (const o of c.orders) {
         const { orderId, refunded } = await insertOrder(client, c.id, now, o);
         if (refunded.itemIds.length > 0) {
+          const refundedAt = ago(now, Math.max(0, (o.deliveredDaysAgo ?? 0) - 3))!;
+          const conversationId = o.refundStory ? await seedSupportConversation(client, c.id, o.refundStory, refundedAt) : null;
           await client.query(
-            `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, item_ids, created_at) VALUES ($1,$2,$3,$4,'historical',$5,$6)`,
-            [`rfd_${orderId}`, orderId, c.id, refunded.cents, refunded.itemIds, ago(now, Math.max(0, (o.deliveredDaysAgo ?? 0) - 3))],
+            `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, item_ids, conversation_id, created_at) VALUES ($1,$2,$3,$4,'historical',$5,$6,$7)`,
+            [`rfd_${orderId}`, orderId, c.id, refunded.cents, refunded.itemIds, conversationId, refundedAt],
           );
         }
       }
@@ -95,8 +118,8 @@ export async function reseed(): Promise<void> {
           items: [{ sku: `HIS-${c.id.slice(-2)}-${idx + 1}`, name: r.name, category: r.category, priceCents: r.cents, refunded: true }],
         });
         await client.query(
-          `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, item_ids, created_at) VALUES ($1,$2,$3,$4,'historical',$5,$6)`,
-          [`rfd_${orderId}`, orderId, c.id, r.cents, refunded.itemIds, ago(now, r.daysAgo)],
+          `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, item_ids, conversation_id, created_at) VALUES ($1,$2,$3,$4,'historical',$5,$6,$7)`,
+          [`rfd_${orderId}`, orderId, c.id, r.cents, refunded.itemIds, await seedSupportConversation(client, c.id, r.story, ago(now, r.daysAgo)!), ago(now, r.daysAgo)],
         );
       }
     }

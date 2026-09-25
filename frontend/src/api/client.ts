@@ -302,7 +302,7 @@ export interface ConversationSummary {
   updatedAt: string;
   preview: string | null;
   messageCount: number;
-  cases: Array<{ reference: string; status: Decision; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
+  cases: Array<{ reference: string | null; status: Decision; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
 }
 
 export interface CustomerRefund {

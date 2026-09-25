@@ -280,10 +280,21 @@ async function main() {
   const noahToken = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_06' } })).json.token;
   const noahRefunds = (await call('GET', '/refunds', { token: noahToken })).json.refunds ?? [];
   check(
-    'earlier refunds show real items and are marked as handled before the assistant',
-    noahRefunds.length === 4 && noahRefunds.every((r) => r.decidedBy === 'earlier' && r.items.length === 1 && !r.conversationId),
-    JSON.stringify(noahRefunds.map((r) => [r.orderNumber, r.items, r.decidedBy])),
+    'earlier refunds show real items, the support team, and the conversation behind each one',
+    noahRefunds.length === 4 && noahRefunds.every((r) => r.decidedBy === 'earlier' && r.items.length === 1 && r.conversationId),
+    JSON.stringify(noahRefunds.map((r) => [r.orderNumber, r.items, r.decidedBy, !!r.conversationId])),
   );
+  const shirt = noahRefunds.find((r) => r.items[0] === 'Coastline Linen Shirt');
+  const shirtChat = (await call('GET', `/conversations/${shirt?.conversationId}/messages`, { token: noahToken })).json.messages ?? [];
+  check(
+    'opening a refunded order shows what the customer said and how the team replied',
+    shirtChat.length === 2 && shirtChat[0].role === 'customer' && shirtChat[1].role === 'agent' && shirtChat[1].content.includes('$65.00'),
+    JSON.stringify(shirtChat.map((m) => m.role)),
+  );
+  const noahHistory = (await call('GET', '/conversations', { token: noahToken })).json.conversations ?? [];
+  check('support conversations appear under Previous enquiries with their refund', noahHistory.length === 4 && noahHistory.every((c) => c.cases.some((k) => k.status === 'APPROVED')));
+  const noahCurrent = (await call('GET', '/conversations/current', { token: noahToken })).json;
+  check('the chat opens fresh instead of resuming a conversation from weeks ago', noahCurrent.messages?.length === 0 && !noahHistory.some((c) => c.id === noahCurrent.id));
   check('refund history carries no internal detail', !/risk|flag|rule|note|reviewer|source/i.test(JSON.stringify([...amaraRefunds, ...noahRefunds])));
   const otherToken = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_02' } })).json.token;
   const otherRefunds = (await call('GET', '/refunds', { token: otherToken })).json.refunds ?? [];

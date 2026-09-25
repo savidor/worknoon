@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, ChevronDown, ChevronRight, MessageSquareText, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
+import { ArrowUp, ChevronRight, MessageSquareText, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { api, tokens, type ConversationSummary, type Customer, type CustomerRefund, type DemoCustomer, type Message, type Order } from '../api/client';
 import { EnquiryHistory } from '../components/EnquiryHistory';
 import { Button, Card, ErrorNote, OUTCOME_STYLE, OutcomeBadge, Pill, Spinner } from '../components/ui';
-import { cx, daysSince, longDate, money, shortDate, time } from '../lib/format';
+import { cx, daysSince, money, shortDate, stamp } from '../lib/format';
 
 const MAX_CHARS = 2000;
 const CUSTOMER_KEY = 'rd.customerId';
@@ -21,6 +21,10 @@ export function ChatPage() {
   const qc = useQueryClient();
   const [customerId, setCustomerId] = useState<string | null>(() => (tokens.get('customer') ? readStoredCustomer() : null));
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // The customer's live chat, and whether they are looking back at an earlier conversation.
+  const [liveId, setLiveId] = useState<string | null>(null);
+  const [historyView, setHistoryView] = useState(false);
+  const chatRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState('');
   // The message being sent, and how many messages existed when it was sent, so the placeholder
   // can step aside as soon as polling brings back the server's saved copy.
@@ -40,6 +44,8 @@ export function ChatPage() {
         /* optional */
       }
       setConversationId(null);
+      setLiveId(null);
+      setHistoryView(false);
       // Sign-in already returns the profile and orders: use them instead of fetching again.
       qc.setQueryData(['me', id], { customer: res.customer, orders: res.orders });
       setCustomerId(id);
@@ -66,6 +72,7 @@ export function ChatPage() {
       const data = await api<{ id: string; messages: Message[] }>('/conversations/current', { role: 'customer' });
       // The response already contains the messages: seed them so the chat renders without a second request.
       qc.setQueryData(['messages', data.id], { messages: data.messages });
+      setLiveId(data.id);
       return data;
     },
     enabled: !!customerId && !conversationId,
@@ -86,9 +93,20 @@ export function ChatPage() {
     refetchInterval: 15_000,
   });
 
-  const latestId = history.data?.conversations[0]?.id;
-  const viewingEarlier = !!activeConversation && !!latestId && activeConversation !== latestId && history.data!.conversations.some((c) => c.id === activeConversation);
   const openedAt = history.data?.conversations.find((c) => c.id === activeConversation)?.createdAt;
+  const viewingHistory = historyView && !!activeConversation && activeConversation !== liveId;
+
+  /** Opens an earlier conversation in the chat window, e.g. from a refunded order or Previous enquiries. */
+  const openHistory = (id: string) => {
+    setConversationId(id);
+    setHistoryView(id !== liveId);
+    // On a phone the chat sits above the sidebar: bring it into view.
+    if (window.matchMedia('(max-width: 1023px)').matches) chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const backToLive = () => {
+    setConversationId(liveId);
+    setHistoryView(false);
+  };
 
   const messages = useQuery({
     queryKey: ['messages', activeConversation],
@@ -138,7 +156,11 @@ export function ChatPage() {
 
   const newConversation = useMutation({
     mutationFn: () => api<{ id: string }>('/conversations', { method: 'POST', role: 'customer' }),
-    onSuccess: (c) => setConversationId(c.id),
+    onSuccess: (c) => {
+      setConversationId(c.id);
+      setLiveId(c.id);
+      setHistoryView(false);
+    },
   });
 
   const selected = demo.data?.customers.find((c) => c.id === customerId);
@@ -168,7 +190,7 @@ export function ChatPage() {
   };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
       <aside className="order-last space-y-4 lg:order-first">
         <Card title="Demo customer" action={<Pill tone="brand">Demo mode</Pill>}>
           <div className="space-y-3 p-4">
@@ -223,14 +245,15 @@ export function ChatPage() {
               orders={me.data?.orders ?? []}
               refunds={refunds.data?.refunds ?? []}
               onPick={(o) => insert(`About order ${o.orderNumber}: `)}
-              onOpenConversation={setConversationId}
+              onOpenConversation={openHistory}
             />
           )}
         </Card>
 
-        <EnquiryHistory conversations={history.data?.conversations} loading={history.isLoading} activeId={activeConversation} onOpen={setConversationId} />
+        <EnquiryHistory conversations={history.data?.conversations} loading={history.isLoading} activeId={activeConversation} onOpen={openHistory} />
       </aside>
 
+      <div ref={chatRef} className="min-w-0 scroll-mt-20">
       <Card className="flex h-[calc(100dvh-7.5rem)] min-h-[540px] flex-col overflow-hidden">
         <header className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
           <div className="grid size-9 place-items-center rounded-full bg-brand-600 text-white">
@@ -245,13 +268,13 @@ export function ChatPage() {
           </Button>
         </header>
 
-        {viewingEarlier && (
+        {viewingHistory && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-100 bg-amber-50/70 px-4 py-2 text-xs text-amber-900">
             <span>
-              Earlier conversation{openedAt ? ` from ${shortDate(openedAt)}` : ''}. You can carry on here, or go back to your latest one.
+              Earlier conversation{openedAt ? ` from ${shortDate(openedAt)}` : ''}. You can reply here, or go back to your current chat.
             </span>
-            <button type="button" onClick={() => setConversationId(latestId!)} className="ml-auto font-medium underline-offset-2 hover:underline">
-              Back to latest
+            <button type="button" onClick={backToLive} className="ml-auto font-medium underline-offset-2 hover:underline">
+              Back to current chat
             </button>
           </div>
         )}
@@ -264,6 +287,14 @@ export function ChatPage() {
                 Tell me which order and what went wrong. I'll check it against our refund policy straight away.
               </p>
             </div>
+          )}
+          {viewingHistory && (
+            <OrderStories
+              orders={me.data?.orders ?? []}
+              refunds={(refunds.data?.refunds ?? []).filter((r) => r.conversationId === activeConversation)}
+              cases={history.data?.conversations.find((c) => c.id === activeConversation)?.cases ?? []}
+              firstMessageAt={list.find((m) => m.role === 'customer')?.createdAt}
+            />
           )}
           {list.map((m) => (
             <MessageBubble key={m.id} message={m} />
@@ -319,6 +350,7 @@ export function ChatPage() {
           <p className="mt-1.5 text-[11px] text-slate-400">Enter to send, Shift+Enter for a new line.</p>
         </div>
       </Card>
+      </div>
     </div>
   );
 }
@@ -385,7 +417,6 @@ function OrderRow({
   onPick: () => void;
   onOpenConversation: (id: string) => void;
 }) {
-  const [showRefunds, setShowRefunds] = useState(false);
   const age = daysSince(order.deliveredAt);
   const windowLeft = age === null ? null : 30 - age;
   const fullyRefunded = order.items.every((i) => i.refundedQuantity >= i.quantity);
@@ -423,16 +454,7 @@ function OrderRow({
       </button>
       {refunds.length > 0 && (
         <div className="px-4 pt-1.5 pb-3 pl-10">
-          <button
-            type="button"
-            onClick={() => setShowRefunds(!showRefunds)}
-            aria-expanded={showRefunds}
-            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 transition hover:bg-emerald-100"
-          >
-            {fullyRefunded ? 'Refunded in full' : 'Partly refunded'} · {money(refundedCents)}
-            <ChevronDown className={cx('size-3 transition', showRefunds && 'rotate-180')} aria-hidden />
-          </button>
-          {showRefunds && <RefundTimeline refunds={refunds} onOpenConversation={onOpenConversation} />}
+          <RefundChip fullyRefunded={fullyRefunded} cents={refundedCents} conversationId={latestConversation(refunds)} onOpen={onOpenConversation} />
         </div>
       )}
     </li>
@@ -445,34 +467,88 @@ const DECIDED_BY_TEXT: Record<CustomerRefund['decidedBy'], string> = {
   specialist: 'Approved by a support specialist',
 };
 
-/** What was refunded, when, and how it was decided, oldest first, with a way back to the conversation. */
-function RefundTimeline({ refunds, onOpenConversation }: { refunds: CustomerRefund[]; onOpenConversation: (id: string) => void }) {
-  const sorted = [...refunds].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+/** The most recent conversation behind an order's refunds, if any. */
+function latestConversation(refunds: CustomerRefund[]): string | null {
+  return [...refunds].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((r) => r.conversationId)?.conversationId ?? null;
+}
+
+function RefundChip({ fullyRefunded, cents, conversationId, onOpen }: { fullyRefunded: boolean; cents: number; conversationId: string | null; onOpen: (id: string) => void }) {
+  const label = `${fullyRefunded ? 'Refunded in full' : 'Partly refunded'} · ${money(cents)}`;
+  const chip = 'inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20';
+  if (!conversationId) return <span className={chip}>{label}</span>;
   return (
-    <ol className="mt-2 space-y-2.5 border-l-2 border-emerald-100 pl-3">
-      {sorted.map((r) => (
-        <li key={r.id} className="relative text-xs">
-          <span className="absolute top-1 -left-[17px] size-2 rounded-full bg-emerald-500 ring-2 ring-white" aria-hidden />
-          <p className="font-medium text-slate-800">
-            {money(r.amountCents)} refunded <span className="font-normal text-slate-500">on {longDate(r.createdAt)}</span>
-          </p>
-          {r.items.length > 0 && <p className="text-slate-600">{r.items.join(', ')}</p>}
-          <p className="text-slate-500">
-            {DECIDED_BY_TEXT[r.decidedBy]}
-            {r.caseReference && <span className="font-mono whitespace-nowrap"> · {r.caseReference}</span>}
-          </p>
-          {r.conversationId && (
-            <button
-              type="button"
-              onClick={() => onOpenConversation(r.conversationId!)}
-              className="mt-0.5 inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"
-            >
-              <MessageSquareText className="size-3" aria-hidden /> View the conversation
-            </button>
-          )}
-        </li>
-      ))}
-    </ol>
+    <button type="button" onClick={() => onOpen(conversationId)} className={cx(chip, 'transition hover:bg-emerald-100')} title="Open the conversation in the chat">
+      {label}
+      <span className="inline-flex items-center gap-1 border-l border-emerald-600/20 pl-1.5">
+        <MessageSquareText className="size-3" aria-hidden /> View history
+      </span>
+    </button>
+  );
+}
+
+type ConversationCase = ConversationSummary['cases'][number];
+
+/**
+ * Pinned above an earlier conversation: what happened to each order it was about, from order
+ * to outcome, so the transcript below reads in context.
+ */
+function OrderStories({
+  orders,
+  refunds,
+  cases,
+  firstMessageAt,
+}: {
+  orders: Order[];
+  refunds: CustomerRefund[];
+  cases: ConversationCase[];
+  firstMessageAt: string | undefined;
+}) {
+  const numbers = [...new Set([...refunds.map((r) => r.orderNumber), ...cases.map((c) => c.orderNumber).filter((n): n is string => !!n)])];
+  const touched = numbers.map((n) => orders.find((o) => o.orderNumber === n)).filter((o): o is Order => !!o);
+  if (touched.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {touched.map((o) => {
+        const steps: Array<{ at: string; text: string; tone?: 'good' | 'bad' | 'wait' }> = [{ at: o.orderedAt, text: 'Ordered' }];
+        if (o.deliveredAt) steps.push({ at: o.deliveredAt, text: 'Delivered' });
+        if (firstMessageAt) steps.push({ at: firstMessageAt, text: 'You contacted us' });
+        for (const r of refunds.filter((x) => x.orderId === o.id)) {
+          steps.push({ at: r.createdAt, text: `${money(r.amountCents)} refunded. ${DECIDED_BY_TEXT[r.decidedBy]}${r.caseReference ? ` (${r.caseReference})` : ''}`, tone: 'good' });
+        }
+        for (const c of cases.filter((x) => x.orderNumber === o.orderNumber && x.status !== 'APPROVED')) {
+          steps.push({
+            at: firstMessageAt ?? o.orderedAt,
+            text: c.status === 'DENIED' ? `Not eligible for a refund${c.reference ? ` (${c.reference})` : ''}` : `Passed to a specialist${c.reference ? ` (${c.reference})` : ''}`,
+            tone: c.status === 'DENIED' ? 'bad' : 'wait',
+          });
+        }
+        steps.sort((a, b) => a.at.localeCompare(b.at));
+        return (
+          <section key={o.id} className="mx-auto max-w-xl rounded-xl border border-slate-200 bg-white p-3 shadow-sm" aria-label={`History of order ${o.orderNumber}`}>
+            <p className="flex items-center gap-2 text-xs font-medium text-slate-800">
+              <Package className="size-3.5 text-slate-400" aria-hidden />
+              Order {o.orderNumber}
+              <span className="truncate font-normal text-slate-500">{o.items.map((i) => i.name).join(', ')}</span>
+            </p>
+            <ol className="mt-2.5 flex flex-wrap gap-x-1 gap-y-2 text-[11px]">
+              {steps.map((st, i) => (
+                <li key={i} className="flex items-center gap-1">
+                  {i > 0 && <ChevronRight className="size-3 text-slate-300" aria-hidden />}
+                  <span
+                    className={cx(
+                      'rounded-md px-1.5 py-0.5',
+                      st.tone === 'good' ? 'bg-emerald-50 text-emerald-800' : st.tone === 'bad' ? 'bg-slate-100 text-slate-700' : st.tone === 'wait' ? 'bg-amber-50 text-amber-800' : 'bg-slate-50 text-slate-600',
+                    )}
+                  >
+                    <span className="font-medium">{st.text}</span> <span className="opacity-70">{shortDate(st.at)}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -482,7 +558,7 @@ function MessageBubble({ message }: { message: Message }) {
       <div className="flex justify-end">
         <div className="max-w-[80%]">
           <div className="whitespace-pre-wrap rounded-2xl rounded-br-md bg-brand-600 px-3.5 py-2.5 text-sm text-white shadow-sm">{message.content}</div>
-          <p className="mt-1 text-right text-[10px] text-slate-400">{time(message.createdAt)}</p>
+          <p className="mt-1 text-right text-[10px] text-slate-400">{stamp(message.createdAt)}</p>
         </div>
       </div>
     );
@@ -502,7 +578,7 @@ function MessageBubble({ message }: { message: Message }) {
           <p className="whitespace-pre-wrap">{message.content}</p>
           <DecisionCard message={message} />
         </div>
-        <p className="mt-1 text-[10px] text-slate-400">{time(message.createdAt)}</p>
+        <p className="mt-1 text-[10px] text-slate-400">{stamp(message.createdAt)}</p>
       </div>
     </div>
   );

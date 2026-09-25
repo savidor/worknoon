@@ -48,9 +48,14 @@ customerRouter.get('/conversations', async (req, res) => {
   res.json({ conversations: await listConversationsFor(customerId(req)) });
 });
 
-/** Resumes the most recent conversation, or starts one. */
+/**
+ * Resumes a conversation that is still in progress, or starts a new one. Anything older than
+ * RESUME_WITHIN_MS is history: it stays under Previous enquiries instead of reopening as today's chat.
+ */
+const RESUME_WITHIN_MS = 12 * 3_600_000;
 customerRouter.get('/conversations/current', async (req, res) => {
-  const id = (await latestConversationFor(customerId(req))) ?? (await createConversation(customerId(req))).id;
+  const latest = await latestConversationFor(customerId(req));
+  const id = latest && Date.now() - latest.updatedAt.getTime() < RESUME_WITHIN_MS ? latest.id : (await createConversation(customerId(req))).id;
   res.json({ id, messages: await listMessages(id) });
 });
 

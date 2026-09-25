@@ -180,7 +180,7 @@ export async function customerRefunds(customerId: string): Promise<CustomerRefun
               (SELECT array_agg(i.name ORDER BY i.id) FROM order_items i WHERE i.id = ANY(f.item_ids)),
               '{}'
             ) AS items,
-            r.reference, r.conversation_id
+            r.reference, COALESCE(f.conversation_id, r.conversation_id) AS conversation_id
      FROM refunds f
      JOIN orders o ON o.id = f.order_id
      LEFT JOIN refund_requests r ON r.id = f.request_id
