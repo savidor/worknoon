@@ -6,7 +6,7 @@ import { HttpError } from '../lib/errors.js';
 import { adminName, requireRole } from '../middleware/auth.js';
 import { eventsForRequest, securityEvents } from '../repositories/audit.repo.js';
 import { listMessages } from '../repositories/conversation.repo.js';
-import { getOrderById } from '../repositories/crm.repo.js';
+import { getOrderById, refundHistory } from '../repositories/crm.repo.js';
 import { getRequest, getStats, listRequests } from '../repositories/request.repo.js';
 import { reseed } from '../seed/seed.js';
 import { getActivePolicy } from '../services/policy.service.js';
@@ -38,12 +38,30 @@ adminRouter.get('/requests', async (req, res) => {
 adminRouter.get('/requests/:id', async (req, res) => {
   const request = await getRequest(z.string().max(80).parse(req.params.id));
   if (!request) throw HttpError.notFound('Refund request not found');
-  const [events, transcript, order] = await Promise.all([
+  const [events, transcript, order, history, policy] = await Promise.all([
     eventsForRequest(request.id),
     listMessages(request.conversation_id, 50),
     request.order_id ? getOrderById(request.order_id) : null,
+    refundHistory(request.customer_id),
+    getActivePolicy(),
   ]);
-  res.json({ request, events, transcript, order });
+  // How the frequency rule saw this customer: refunds in the lookback window before the case.
+  const caseAt = new Date(request.created_at).getTime();
+  const windowStart = caseAt - policy.config.frequencyLookbackDays * 86_400_000;
+  const inWindow = history.filter((h) => h.createdAt.getTime() < caseAt && h.createdAt.getTime() >= windowStart);
+  res.json({
+    request,
+    events,
+    transcript,
+    order,
+    refundHistory: {
+      entries: history,
+      lookbackDays: policy.config.frequencyLookbackDays,
+      reviewFrom: policy.config.frequencyMaxRefunds,
+      countInWindow: inWindow.length,
+      amountInWindowCents: inWindow.reduce((s, h) => s + h.amountCents, 0),
+    },
+  });
 });
 
 const ReviewBody = z.object({

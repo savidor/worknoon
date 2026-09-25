@@ -110,6 +110,10 @@ async function main() {
     }
   }
 
+  const greeter = await customerSession('cus_06');
+  const hello = await say(greeter, 'Hello, good morning');
+  check('a greeting gets a greeting, not an unrequested order status', hello.outcome === 'INFO' && !/delivered|WN-\d{5}/.test(hello.assistantMessage.content), hello.assistantMessage.content);
+
   console.log('\nSecurity');
   const liam = cases.cus_04;
   const other = await customerSession('cus_02');
@@ -127,6 +131,9 @@ async function main() {
   check('cross-account order access is in the security log', types.has('security.ownership_mismatch'));
 
   console.log('\nHuman review');
+  const noahCase = await call('GET', `/admin/requests/${cases.cus_06.caseId}`, { token: admin });
+  const hist = noahCase.json.refundHistory;
+  check('case detail shows refund history behind the frequency rule', hist?.countInWindow === 4 && hist.entries.every((e) => e.source === 'historical'), JSON.stringify(hist).slice(0, 160));
   const detail = await call('GET', `/admin/requests/${liam.caseId}`, { token: admin });
   check('case detail includes trace, rules and audit events', detail.json.request?.trace?.length > 0 && detail.json.events?.length > 0);
   const approve = await call('POST', `/admin/requests/${liam.caseId}/review`, {

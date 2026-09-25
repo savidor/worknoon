@@ -17,6 +17,7 @@ export function relative(iso: string): string {
 export const daysSince = (iso: string | null) =>
   iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000) : null;
 
-export const humanize = (s: string) => s.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase());
+export const humanize = (s: string) =>
+  s.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase()).replace(/\bai\b/gi, 'AI');
 
 export const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');

@@ -136,3 +136,22 @@ export async function recordRefund(
     [args.refundId, args.orderId, args.customerId, args.amountCents, args.source],
   );
 }
+
+export interface RefundHistoryEntry {
+  id: string;
+  orderNumber: string;
+  amountCents: number;
+  source: 'historical' | 'automated' | 'human_review';
+  createdAt: Date;
+}
+
+/** The customer's refund ledger, newest first, including refunds made before RefundDesk. */
+export async function refundHistory(customerId: string, limit = 25): Promise<RefundHistoryEntry[]> {
+  const { rows } = await pool.query<{ id: string; order_number: string; amount_cents: number; source: RefundHistoryEntry['source']; created_at: Date }>(
+    `SELECT r.id, o.order_number, r.amount_cents, r.source, r.created_at
+     FROM refunds r JOIN orders o ON o.id = r.order_id
+     WHERE r.customer_id = $1 ORDER BY r.created_at DESC LIMIT $2`,
+    [customerId, limit],
+  );
+  return rows.map((r) => ({ id: r.id, orderNumber: r.order_number, amountCents: r.amount_cents, source: r.source, createdAt: r.created_at }));
+}

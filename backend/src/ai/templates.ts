@@ -70,7 +70,9 @@ export function templateReply(ctx: ReplyContext): ReplyDraft {
     case 'INFO':
     default:
       return {
-        customerReply: `${hi} ${ctx.statusLine ? `${sentenceCase(ctx.statusLine)} ` : ''}I can help with refunds, returns and cancellations. Just tell me which order and what went wrong.`,
+        customerReply: ctx.statusLine
+          ? `${hi} ${sentenceCase(ctx.statusLine)} I can also help with refunds, returns and cancellations if you need anything.`
+          : `${hi} thanks for getting in touch. I can help with refunds, returns and cancellations. Just tell me which order and what went wrong.`,
         internalNote: 'Non-refund inquiry answered.',
       };
   }

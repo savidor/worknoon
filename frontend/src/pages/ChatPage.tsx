@@ -21,7 +21,9 @@ export function ChatPage() {
   const [customerId, setCustomerId] = useState<string | null>(() => (tokens.get('customer') ? readStoredCustomer() : null));
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [pending, setPending] = useState<string | null>(null);
+  // The message being sent, and how many messages existed when it was sent, so the placeholder
+  // can step aside as soon as polling brings back the server's saved copy.
+  const [pending, setPending] = useState<{ content: string; baseCount: number } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const demo = useQuery({ queryKey: ['demo-customers'], queryFn: () => api<{ customers: DemoCustomer[] }>('/demo/customers') });
@@ -71,7 +73,10 @@ export function ChatPage() {
   const send = useMutation({
     mutationFn: (content: string) =>
       api(`/conversations/${activeConversation}/messages`, { method: 'POST', body: { content }, role: 'customer' }),
-    onMutate: (content) => setPending(content),
+    onMutate: (content) => {
+      const saved = qc.getQueryData<{ messages: Message[] }>(['messages', activeConversation]);
+      setPending({ content, baseCount: saved?.messages.length ?? 0 });
+    },
     // Never lose what the customer typed: put it back so they can retry.
     onError: (_err, content) => setDraft((d) => d || content),
     onSettled: async () => {
@@ -88,6 +93,8 @@ export function ChatPage() {
 
   const selected = demo.data?.customers.find((c) => c.id === customerId);
   const list = messages.data?.messages ?? [];
+  const pendingSaved =
+    !!pending && list.slice(pending.baseCount).some((m) => m.role === 'customer' && m.content === pending.content.trim());
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -192,7 +199,9 @@ export function ChatPage() {
           ))}
           {pending && (
             <>
-              <MessageBubble message={{ id: 'pending', role: 'customer', content: pending, meta: {}, createdAt: new Date().toISOString() }} />
+              {!pendingSaved && (
+                <MessageBubble message={{ id: 'pending', role: 'customer', content: pending.content, meta: {}, createdAt: new Date().toISOString() }} />
+              )}
               <TypingIndicator />
             </>
           )}

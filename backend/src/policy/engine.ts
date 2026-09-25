@@ -203,7 +203,7 @@ export function evaluateRefund(input: EvaluationInput, policy: ActivePolicy = DE
   if (signals.refundsInLookback >= cfg.frequencyMaxRefunds) {
     overlay(
       'REFUND_FREQUENCY',
-      `${signals.refundsInLookback} refunds in the last ${cfg.frequencyLookbackDays} days (limit ${cfg.frequencyMaxRefunds - 1}).`,
+      `${signals.refundsInLookback} refunds in the last ${cfg.frequencyLookbackDays} days (review from ${cfg.frequencyMaxRefunds}).`,
     );
   }
   const riskyFlags = customer.accountFlags.filter((f) => cfg.riskAccountFlags.includes(f));

@@ -5,11 +5,52 @@ import { api, type AuditEvent, type Message, type Order, type RequestDetail } fr
 import { cx, humanize, money, relative, shortDate, time } from '../lib/format';
 import { Button, ErrorNote, FlagBadge, OutcomeBadge, Pill, Spinner } from './ui';
 
+interface RefundHistory {
+  entries: Array<{ id: string; orderNumber: string; amountCents: number; source: 'historical' | 'automated' | 'human_review'; createdAt: string }>;
+  lookbackDays: number;
+  reviewFrom: number;
+  countInWindow: number;
+  amountInWindowCents: number;
+}
+
 interface Detail {
   request: RequestDetail;
   events: AuditEvent[];
   transcript: Message[];
   order: Order | null;
+  refundHistory: RefundHistory;
+}
+
+const SOURCE_LABEL = { historical: 'Before RefundDesk', automated: 'Automated', human_review: 'Specialist' } as const;
+
+function RefundHistorySection({ history }: { history: RefundHistory }) {
+  const overLimit = history.countInWindow >= history.reviewFrom;
+  return (
+    <Section title="Customer refund history" hint="From the refunds ledger, including refunds made before RefundDesk">
+      <p className={cx('mb-2 rounded-lg px-3 py-2 text-sm', overLimit ? 'bg-amber-50 text-amber-900' : 'bg-slate-50 text-slate-700')}>
+        <b className="tabular-nums">{history.countInWindow}</b> refund{history.countInWindow === 1 ? '' : 's'} ({money(history.amountInWindowCents)}) in the{' '}
+        {history.lookbackDays} days before this request. Policy sends customers to a specialist from {history.reviewFrom}.
+      </p>
+      {history.entries.length === 0 ? (
+        <p className="text-xs text-slate-500">No refunds on record.</p>
+      ) : (
+        <table className="w-full text-xs">
+          <tbody className="divide-y divide-slate-100">
+            {history.entries.map((h) => (
+              <tr key={h.id}>
+                <td className="py-1.5 text-slate-500">{shortDate(h.createdAt)}</td>
+                <td className="py-1.5 font-mono">{h.orderNumber}</td>
+                <td className="py-1.5">
+                  <Pill tone={h.source === 'historical' ? 'slate' : h.source === 'automated' ? 'emerald' : 'amber'}>{SOURCE_LABEL[h.source]}</Pill>
+                </td>
+                <td className="py-1.5 text-right tabular-nums">{money(h.amountCents)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Section>
+  );
 }
 
 export function CaseDrawer({ id, onClose }: { id: string; onClose: () => void }) {
@@ -102,6 +143,8 @@ export function CaseDrawer({ id, onClose }: { id: string; onClose: () => void })
               </Section>
 
               {r.extraction && <ExtractionView extraction={r.extraction} />}
+
+              {data.refundHistory && <RefundHistorySection history={data.refundHistory} />}
 
               <Section icon={<Gavel className="size-4" />} title="Policy decision">
                 {r.line_decisions.length > 0 && (

@@ -219,7 +219,9 @@ export async function handleCustomerTurn(args: {
 
   // 5a. Not a refund request: answer and stop.
   if (!isRefundIntent && manipulation.length === 0) {
-    const ownOrder = order && order.customerId === customer.id ? order : null;
+    // Only volunteer order status when the customer asked about an order; a greeting gets a greeting.
+    const asked = extraction.intent === 'order_inquiry';
+    const ownOrder = asked && order && order.customerId === customer.id ? order : null;
     return replyWithoutCase({
       trace, audit, started, policy, conversationId, customerMessage, extraction, outcome: 'INFO',
       ctx: {

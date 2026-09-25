@@ -83,12 +83,13 @@ function Console({ onLogout }: { onLogout: () => void }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Stat label="Cases" value={s?.total ?? 0} hint={`${s?.human_reviewed ?? 0} reviewed by a person`} />
-        <Stat label="Resolved automatically" value={`${autoRate}%`} hint="Approved or denied without review" />
-        <Stat label="Needs review" value={s?.pending_review ?? 0} hint={`${money(s?.pending_cents)} on hold`} tone={s?.pending_review ? 'amber' : undefined} />
-        <Stat label="Refunded" value={money(s?.refunded_cents)} hint={`${s?.approved ?? 0} approved · ${s?.denied ?? 0} denied`} />
-        <Stat label="Flagged" value={s?.flagged ?? 0} hint="Risk or security signals" tone={s?.flagged ? 'rose' : undefined} />
-        <Stat label="Avg decision time" value={`${((s?.avg_latency_ms ?? 0) / 1000).toFixed(1)}s`} hint="End to end, incl. AI" />
+        {/* Until stats arrive, show a placeholder rather than zeros that look like real figures. */}
+        <Stat label="Cases" value={s ? s.total : '...'} hint={s ? `${s.human_reviewed} reviewed by a person` : undefined} />
+        <Stat label="Resolved automatically" value={s ? `${autoRate}%` : '...'} hint="Approved or denied without review" />
+        <Stat label="Needs review" value={s ? s.pending_review : '...'} hint={s ? `${money(s.pending_cents)} on hold` : undefined} tone={s?.pending_review ? 'amber' : undefined} />
+        <Stat label="Refunded by RefundDesk" value={s ? money(s.refunded_cents) : '...'} hint={s ? `${s.approved} approved · ${s.denied} denied` : undefined} />
+        <Stat label="Flagged" value={s ? s.flagged : '...'} hint="Risk or security signals" tone={s?.flagged ? 'rose' : undefined} />
+        <Stat label="Avg decision time" value={s ? `${(s.avg_latency_ms / 1000).toFixed(1)}s` : '...'} hint="End to end, incl. AI" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">

@@ -262,10 +262,10 @@ Customer-facing replies never reveal that anything was detected. The attacker se
 
 ![Support console](docs/screenshots/support-console.png)
 
-- **KPIs**: cases, automatic resolution rate, review queue and money on hold, amount refunded, flagged cases, average decision time.
+- **KPIs**: cases, automatic resolution rate, review queue and money on hold, amount refunded by RefundDesk decisions (historical refunds from before RefundDesk are not counted as its output), flagged cases, average decision time.
 - **Decisions over 7 days**, split by outcome.
 - **Request queue** with filters (needs review, approved, denied, flagged) and search by reference, customer or order.
-- **Case detail**: the customer's message, what the AI understood (with confidence), per-item decisions, every triggered rule with its explanation, the reply that was sent, the AI's note for the reviewer, the timed pipeline trace, the audit trail, and the full conversation.
+- **Case detail**: the customer's message, what the AI understood (with confidence), the customer's refund history from the ledger (including refunds made before RefundDesk, and how many fall inside the frequency lookback), per-item decisions, every triggered rule with its explanation, the reply that was sent, the AI's note for the reviewer, the timed pipeline trace, the audit trail, and the full conversation.
 - **Human review**: approve or deny an escalated case with a required internal note and an optional message to the customer. Approval re-checks item state inside a locked transaction, writes to the refund ledger, and posts an update into the customer's chat.
 - **Security log**: manipulation attempts, cross-account access, and blocked replies.
 
@@ -325,7 +325,7 @@ node scripts/e2e-scenarios.mjs
 ```
 
 - **91 unit tests**, including one per policy rule and boundary (day 30 vs 31, exactly $500 vs $500.01), injection and non-injection examples (firm or angry customers must not be flagged), output guard violations, the Gemini model chain and circuit breaker, custom rule conditions and validation (no approvals, no leaky wording, no absurd thresholds), and tests that the rendered policy page matches the engine for any version.
-- **44 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
+- **46 end-to-end checks** covering all 15 personas, cross-account access, admin authorization, risk-flag leakage, double review, double refund, three simultaneous requests for the same item, greetings answered without volunteering order details, refund history behind the frequency rule, the specialist update reaching the customer, and the Policy Studio (simulate, guardrails, publish, the chat following the new rules, rollback). CI runs them in offline mode so results are deterministic; they also pass with Gemini enabled.
 - **GitHub Actions** runs typecheck, unit tests, the frontend build, and the full end-to-end suite against `docker compose`.
 
 The model path was also tested against a stubbed model that deliberately returns a policy-violating reply (a false approval with an invented amount) to confirm the output guard blocks it and logs `security.reply_blocked`, and against model failures to confirm the fallback path.
