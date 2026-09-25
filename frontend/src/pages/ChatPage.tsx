@@ -118,6 +118,14 @@ export function ChatPage() {
     },
   });
 
+  // A different customer starts clean: nothing typed for one person should carry over to the next.
+  const resetSend = send.reset;
+  useEffect(() => {
+    setDraft('');
+    setPending(null);
+    resetSend();
+  }, [customerId, resetSend]);
+
   const newConversation = useMutation({
     mutationFn: () => api<{ id: string }>('/conversations', { method: 'POST', role: 'customer' }),
     onSuccess: (c) => setConversationId(c.id),
