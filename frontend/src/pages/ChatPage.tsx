@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
+import { ArrowUp, ChevronRight, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { api, tokens, type ConversationSummary, type Customer, type DemoCustomer, type Message, type Order } from '../api/client';
 import { EnquiryHistory } from '../components/EnquiryHistory';
@@ -179,17 +179,24 @@ export function ChatPage() {
               ))}
             </select>
             {selected?.scenario && (
-              <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                <p className="font-medium text-slate-800">{selected.scenario.title}</p>
-                <p className="mt-1">
-                  Expected outcome:{' '}
-                  {selected.scenario.expected in OUTCOME_STYLE ? (
-                    <OutcomeBadge outcome={selected.scenario.expected as keyof typeof OUTCOME_STYLE} />
-                  ) : (
-                    selected.scenario.expected
-                  )}
-                </p>
-              </div>
+              // A presenter's note, folded away so the chat looks like what a real customer sees.
+              <details key={selected.id} className="group rounded-lg text-xs text-slate-600">
+                <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-slate-500 hover:text-slate-800 [&::-webkit-details-marker]:hidden">
+                  <ChevronRight className="size-3.5 transition group-open:rotate-90" aria-hidden />
+                  What this demo tests
+                </summary>
+                <div className="mt-2 rounded-lg bg-slate-50 p-3">
+                  <p className="font-medium text-slate-800">{selected.scenario.title}</p>
+                  <p className="mt-1">
+                    Expected outcome:{' '}
+                    {selected.scenario.expected in OUTCOME_STYLE ? (
+                      <OutcomeBadge outcome={selected.scenario.expected as keyof typeof OUTCOME_STYLE} />
+                    ) : (
+                      selected.scenario.expected
+                    )}
+                  </p>
+                </div>
+              </details>
             )}
             <p className="text-[11px] leading-relaxed text-slate-500">
               Stands in for the store login. The API takes the customer's identity from this session only, never from what
