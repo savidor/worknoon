@@ -49,7 +49,7 @@ Then open **http://localhost:8080**.
 
 **No API key is required.** Without one, the app runs in **offline mode**: keyword heuristics extract the request and templates write the replies. Every feature, decision, and security control works the same, so you can evaluate the whole product immediately. The header shows which mode is active.
 
-The database migrates and seeds itself on first boot, including **a week of sample activity** so the console is populated from the start: about 20 cases from background customers covering approvals, denials, specialist reviews, a cross-account attempt and prompt injections. They are produced by running real requests through the real pipeline (offline, no model quota) and moving their timestamps into the past. They are separate from the 15 demo personas below, so every persona's suggested prompts behave as documented. Use **Reset demo data** in the console to start fresh at any time.
+The database migrates and seeds itself on first boot, including **a week of sample activity** so the console is populated from the start: about 20 cases from background customers covering approvals, denials, specialist reviews, a cross-account attempt and prompt injections. They are produced by running real requests through the real pipeline (offline, no model quota) and moving their timestamps into the past. They are separate from the 15 demo personas below, so every persona's suggested prompts behave as documented. Use **Reset demo** in the console to start fresh at any time.
 
 ## Enabling the AI model
 
@@ -239,10 +239,11 @@ The engine takes the active policy as a parameter (thresholds plus custom rules)
 
 - **Gemini** (`gemini-3.5-flash-lite` by default, chosen for speed): `generateContent` with a JSON Schema generated from the Zod schemas, so the output is constrained at decode time, then re-validated with Zod before anything uses it. Thinking is set to minimal and prompts are compact, because classifying a message and wording a short reply need no extended reasoning. Requests move down a model chain on quota or capacity errors (each model has its own quota), and each attempt has an 8 second budget. A per-model **circuit breaker** pauses a failing model (for Google's suggested retry delay, or an hour when a daily quota is spent), so customers never wait on a model that is known to be down. If the model fails while reading a message, the reply for that message comes straight from a template rather than waiting on the model a second time; with the model fully down, a customer still gets a correct answer in about 2 seconds. The reply has its own 2.5 second budget: if the model has not worded it by then, the template reply is sent at once. The case trace records which model answered.
 
-**Speed.** Measured on a modest 8 GB laptop: a message answered by Gemini takes about 2.5 to 4.5 seconds end to end; screens are usable in under 1.3 seconds on first visit and about 0.4 seconds afterwards; opening a case takes about 0.1 seconds because it is preloaded on hover. The chat reuses data the server already returned instead of refetching, API connections are kept warm, and routine polling is not logged.
 - **Offline**: keyword heuristics and templates. It is the default when no key is set, and the **automatic fallback** when the model times out, errors, is blocked, or returns unparseable output. The fallback is recorded in the case trace, so degraded decisions stay visible.
 
 The customer is never left without an answer, and the decision is identical either way, because it never depended on the model. The interface also keeps the model swappable: moving to another vendor means one new adapter, with no change to the pipeline, engine, or security layers.
+
+**Speed.** Measured on a modest 8 GB laptop: a message answered by Gemini takes about 2.5 to 4.5 seconds end to end; screens are usable in under 1.3 seconds on first visit and about 0.4 seconds afterwards; opening a case takes about 0.1 seconds because it is preloaded on hover. The chat reuses data the server already returned instead of refetching, API connections are kept warm, and routine polling is not logged.
 
 ---
 
@@ -320,7 +321,7 @@ All routes are under `/api`. Customer routes need a customer token; admin routes
 | POST | `/conversations` | customer | Start a conversation |
 | GET | `/refunds` | customer | The customer's refunds: amount, date, items, how it was decided, and the case and conversation it came from |
 | GET | `/conversations` | customer | Earlier enquiries with a customer-safe outcome for each case (no risk or rule detail) |
-| GET | `/conversations/current` | customer | Resume the latest conversation |
+| GET | `/conversations/current` | customer | Resume a conversation active in the last 12 hours, or start a new one |
 | GET | `/conversations/:id/messages` | customer | Messages (owner only) |
 | POST | `/conversations/:id/messages` | customer | **Send a message and run the pipeline** |
 | GET | `/admin/stats` | admin | Dashboard metrics; `days` = 7, 30 or 90 |
