@@ -40,15 +40,20 @@ export async function insertOrder(
       total,
     ],
   );
+  const refunded: { itemIds: string[]; cents: number } = { itemIds: [], cents: 0 };
   for (const [idx, item] of o.items.entries()) {
     const qty = item.quantity ?? 1;
+    if (item.refunded) {
+      refunded.itemIds.push(`${orderId}_i${idx + 1}`);
+      refunded.cents += item.priceCents * qty;
+    }
     await client.query(
       `INSERT INTO order_items (id, order_id, sku, name, category, unit_price_cents, quantity, final_sale, refunded_quantity)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [`${orderId}_i${idx + 1}`, orderId, item.sku, item.name, item.category, item.priceCents, qty, item.finalSale ?? false, item.refunded ? qty : 0],
     );
   }
-  return { orderId, total };
+  return { orderId, total, refunded };
 }
 
 /** Wipes all data and loads the synthetic dataset. Safe to run repeatedly. */
@@ -68,11 +73,11 @@ export async function reseed(): Promise<void> {
       );
 
       for (const o of c.orders) {
-        const { orderId, total } = await insertOrder(client, c.id, now, o);
-        if (o.items.some((i) => i.refunded)) {
+        const { orderId, refunded } = await insertOrder(client, c.id, now, o);
+        if (refunded.itemIds.length > 0) {
           await client.query(
-            `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, created_at) VALUES ($1,$2,$3,$4,'historical',$5)`,
-            [`rfd_${orderId}`, orderId, c.id, total, ago(now, Math.max(0, (o.deliveredDaysAgo ?? 0) - 3))],
+            `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, item_ids, created_at) VALUES ($1,$2,$3,$4,'historical',$5,$6)`,
+            [`rfd_${orderId}`, orderId, c.id, refunded.cents, refunded.itemIds, ago(now, Math.max(0, (o.deliveredDaysAgo ?? 0) - 3))],
           );
         }
       }
@@ -81,7 +86,7 @@ export async function reseed(): Promise<void> {
       for (const [idx, r] of (c.pastRefunds ?? []).entries()) {
         // Earlier orders use a lower number range than the customer's current orders, as a real store's would.
         const number = `WN-09${c.id.slice(-2)}${idx + 1}`;
-        const { orderId } = await insertOrder(client, c.id, now, {
+        const { orderId, refunded } = await insertOrder(client, c.id, now, {
           number,
           status: 'delivered',
           orderedDaysAgo: r.daysAgo + 8,
@@ -90,8 +95,8 @@ export async function reseed(): Promise<void> {
           items: [{ sku: `HIS-${c.id.slice(-2)}-${idx + 1}`, name: r.name, category: r.category, priceCents: r.cents, refunded: true }],
         });
         await client.query(
-          `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, created_at) VALUES ($1,$2,$3,$4,'historical',$5)`,
-          [`rfd_${orderId}`, orderId, c.id, r.cents, ago(now, r.daysAgo)],
+          `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, item_ids, created_at) VALUES ($1,$2,$3,$4,'historical',$5,$6)`,
+          [`rfd_${orderId}`, orderId, c.id, r.cents, refunded.itemIds, ago(now, r.daysAgo)],
         );
       }
     }

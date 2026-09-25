@@ -121,7 +121,7 @@ export async function countRefundsSince(customerId: string, since: Date): Promis
  */
 export async function recordRefund(
   db: Queryable,
-  args: { refundId: string; orderId: string; customerId: string; itemIds: string[]; amountCents: number; source: 'automated' | 'human_review' },
+  args: { refundId: string; requestId: string; orderId: string; customerId: string; itemIds: string[]; amountCents: number; source: 'automated' | 'human_review' },
 ): Promise<void> {
   if (args.amountCents <= 0) return;
   const claimed = await db.query(
@@ -132,8 +132,8 @@ export async function recordRefund(
   );
   if (claimed.rowCount !== new Set(args.itemIds).size) throw new RefundConflictError();
   await db.query(
-    `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source) VALUES ($1,$2,$3,$4,$5)`,
-    [args.refundId, args.orderId, args.customerId, args.amountCents, args.source],
+    `INSERT INTO refunds (id, order_id, customer_id, amount_cents, source, request_id, item_ids) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [args.refundId, args.orderId, args.customerId, args.amountCents, args.source, args.requestId, args.itemIds],
   );
 }
 
@@ -154,4 +154,50 @@ export async function refundHistory(customerId: string, limit = 25): Promise<Ref
     [customerId, limit],
   );
   return rows.map((r) => ({ id: r.id, orderNumber: r.order_number, amountCents: r.amount_cents, source: r.source, createdAt: r.created_at }));
+}
+
+export interface CustomerRefund {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  amountCents: number;
+  createdAt: Date;
+  /** How the refund was decided, in terms a customer can be told. */
+  decidedBy: 'earlier' | 'assistant' | 'specialist';
+  items: string[];
+  caseReference: string | null;
+  conversationId: string | null;
+}
+
+/**
+ * A customer's own refunds, for their order history. Customer-safe by construction: it reads
+ * the ledger and case reference only, never rule ids, risk flags or reviewer notes.
+ */
+export async function customerRefunds(customerId: string): Promise<CustomerRefund[]> {
+  const { rows } = await pool.query(
+    `SELECT f.id, f.order_id, o.order_number, f.amount_cents, f.created_at, f.source,
+            COALESCE(
+              (SELECT array_agg(i.name ORDER BY i.id) FROM order_items i WHERE i.id = ANY(f.item_ids)),
+              '{}'
+            ) AS items,
+            r.reference, r.conversation_id
+     FROM refunds f
+     JOIN orders o ON o.id = f.order_id
+     LEFT JOIN refund_requests r ON r.id = f.request_id
+     WHERE f.customer_id = $1
+     ORDER BY f.created_at DESC`,
+    [customerId],
+  );
+  const decidedBy = { historical: 'earlier', automated: 'assistant', human_review: 'specialist' } as const;
+  return rows.map((r) => ({
+    id: r.id,
+    orderId: r.order_id,
+    orderNumber: r.order_number,
+    amountCents: r.amount_cents,
+    createdAt: r.created_at,
+    decidedBy: decidedBy[r.source as keyof typeof decidedBy],
+    items: r.items,
+    caseReference: r.reference ?? null,
+    conversationId: r.conversation_id ?? null,
+  }));
 }

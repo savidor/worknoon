@@ -304,3 +304,15 @@ export interface ConversationSummary {
   messageCount: number;
   cases: Array<{ reference: string; status: Decision; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
 }
+
+export interface CustomerRefund {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  amountCents: number;
+  createdAt: string;
+  decidedBy: 'earlier' | 'assistant' | 'specialist';
+  items: string[];
+  caseReference: string | null;
+  conversationId: string | null;
+}

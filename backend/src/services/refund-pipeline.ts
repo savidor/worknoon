@@ -566,6 +566,7 @@ async function createCase(args: {
     if (decision === 'APPROVED' && order) {
       await recordRefund(db, {
         refundId: `rfd_${randomUUID()}`,
+        requestId: id,
         orderId: order.id,
         customerId: args.customer.id,
         itemIds: approved.map((l) => l.itemId),

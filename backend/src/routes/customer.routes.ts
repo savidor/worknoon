@@ -10,7 +10,7 @@ import {
   listConversationsFor,
   listMessages,
 } from '../repositories/conversation.repo.js';
-import { getCustomer, listOrdersForCustomer } from '../repositories/crm.repo.js';
+import { customerRefunds, getCustomer, listOrdersForCustomer } from '../repositories/crm.repo.js';
 import { MAX_MESSAGE_CHARS } from '../security/input.js';
 import { publicCustomer } from '../services/presenters.js';
 import { handleCustomerTurn } from '../services/refund-pipeline.js';
@@ -32,6 +32,11 @@ customerRouter.get('/me', async (req, res) => {
   const customer = await getCustomer(customerId(req));
   if (!customer) throw HttpError.unauthorized();
   res.json({ customer: publicCustomer(customer), orders: await listOrdersForCustomer(customer.id) });
+});
+
+/** The customer's refunds: what was refunded, when, and how it was decided. */
+customerRouter.get('/refunds', async (req, res) => {
+  res.json({ refunds: await customerRefunds(customerId(req)) });
 });
 
 customerRouter.post('/conversations', async (req, res) => {

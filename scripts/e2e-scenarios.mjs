@@ -270,7 +270,24 @@ async function main() {
   check('enquiry history carries no internal risk detail', !/risk|flag|rule|internal/i.test(JSON.stringify(history)));
   const reopened = await call('GET', `/conversations/${history[0]?.id}/messages`, { token: amaraToken });
   check('an earlier enquiry opens with its full transcript', reopened.status === 200 && reopened.json.messages.length === history[0].messageCount);
+  const amaraRefunds = (await call('GET', '/refunds', { token: amaraToken })).json.refunds ?? [];
+  const fromChat = amaraRefunds.find((r) => r.orderNumber === 'WN-10001');
+  check(
+    'a refunded order shows what was refunded, when, how, and links back to its conversation',
+    fromChat?.decidedBy === 'assistant' && fromChat.items.some((n) => n.includes('AuraSound')) && fromChat.caseReference && fromChat.conversationId === history[0]?.id,
+    JSON.stringify(fromChat),
+  );
+  const noahToken = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_06' } })).json.token;
+  const noahRefunds = (await call('GET', '/refunds', { token: noahToken })).json.refunds ?? [];
+  check(
+    'earlier refunds show real items and are marked as handled before the assistant',
+    noahRefunds.length === 4 && noahRefunds.every((r) => r.decidedBy === 'earlier' && r.items.length === 1 && !r.conversationId),
+    JSON.stringify(noahRefunds.map((r) => [r.orderNumber, r.items, r.decidedBy])),
+  );
+  check('refund history carries no internal detail', !/risk|flag|rule|note|reviewer|source/i.test(JSON.stringify([...amaraRefunds, ...noahRefunds])));
   const otherToken = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_02' } })).json.token;
+  const otherRefunds = (await call('GET', '/refunds', { token: otherToken })).json.refunds ?? [];
+  check("another customer's refunds stay private", !otherRefunds.some((r) => r.orderNumber === 'WN-10001' || r.orderNumber.startsWith('WN-0906')));
   const otherHistory = (await call('GET', '/conversations', { token: otherToken })).json.conversations ?? [];
   check(
     "another customer's enquiries stay private",

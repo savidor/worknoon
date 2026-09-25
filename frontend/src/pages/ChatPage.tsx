@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, ChevronRight, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronRight, MessageSquareText, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { api, tokens, type ConversationSummary, type Customer, type DemoCustomer, type Message, type Order } from '../api/client';
+import { api, tokens, type ConversationSummary, type Customer, type CustomerRefund, type DemoCustomer, type Message, type Order } from '../api/client';
 import { EnquiryHistory } from '../components/EnquiryHistory';
 import { Button, Card, ErrorNote, OUTCOME_STYLE, OutcomeBadge, Pill, Spinner } from '../components/ui';
-import { cx, daysSince, money, shortDate, time } from '../lib/format';
+import { cx, daysSince, longDate, money, shortDate, time } from '../lib/format';
 
 const MAX_CHARS = 2000;
 const CUSTOMER_KEY = 'rd.customerId';
@@ -56,6 +56,8 @@ export function ChatPage() {
     queryKey: ['me', customerId],
     queryFn: () => api<{ customer: Customer; orders: Order[] }>('/me', { role: 'customer' }),
     enabled: !!customerId,
+    // Keeps order badges current when a specialist approves a case in the console.
+    refetchInterval: 15_000,
   });
 
   const current = useQuery({
@@ -77,6 +79,13 @@ export function ChatPage() {
     // Picks up specialist decisions made in the console.
     refetchInterval: 15_000,
   });
+  const refunds = useQuery({
+    queryKey: ['refunds', customerId],
+    queryFn: () => api<{ refunds: CustomerRefund[] }>('/refunds', { role: 'customer' }),
+    enabled: !!customerId,
+    refetchInterval: 15_000,
+  });
+
   const latestId = history.data?.conversations[0]?.id;
   const viewingEarlier = !!activeConversation && !!latestId && activeConversation !== latestId && history.data!.conversations.some((c) => c.id === activeConversation);
   const openedAt = history.data?.conversations.find((c) => c.id === activeConversation)?.createdAt;
@@ -115,6 +124,7 @@ export function ChatPage() {
       setPending(null);
       void qc.invalidateQueries({ queryKey: ['me', customerId] });
       void qc.invalidateQueries({ queryKey: ['conversations', customerId] });
+      void qc.invalidateQueries({ queryKey: ['refunds', customerId] });
     },
   });
 
@@ -209,7 +219,12 @@ export function ChatPage() {
           {me.isLoading ? (
             <Spinner />
           ) : (
-            <OrderList orders={me.data?.orders ?? []} onPick={(o) => insert(`About order ${o.orderNumber}: `)} />
+            <OrderList
+              orders={me.data?.orders ?? []}
+              refunds={refunds.data?.refunds ?? []}
+              onPick={(o) => insert(`About order ${o.orderNumber}: `)}
+              onOpenConversation={setConversationId}
+            />
           )}
         </Card>
 
@@ -311,7 +326,20 @@ export function ChatPage() {
 const isClosed = (o: Order) => o.status === 'cancelled' || o.items.every((i) => i.refundedQuantity >= i.quantity);
 
 /** Orders a customer might still ask about come first; fully refunded or cancelled ones fold away. */
-function OrderList({ orders, onPick }: { orders: Order[]; onPick: (o: Order) => void }) {
+function OrderList({
+  orders,
+  refunds,
+  onPick,
+  onOpenConversation,
+}: {
+  orders: Order[];
+  refunds: CustomerRefund[];
+  onPick: (o: Order) => void;
+  onOpenConversation: (id: string) => void;
+}) {
+  const row = (o: Order) => (
+    <OrderRow key={o.id} order={o} refunds={refunds.filter((r) => r.orderId === o.id)} onPick={() => onPick(o)} onOpenConversation={onOpenConversation} />
+  );
   const [showClosed, setShowClosed] = useState(false);
   const open = orders.filter((o) => !isClosed(o));
   const closed = orders.filter(isClosed);
@@ -320,9 +348,7 @@ function OrderList({ orders, onPick }: { orders: Order[]; onPick: (o: Order) => 
   return (
     <>
       <ul className="divide-y divide-slate-100">
-        {open.map((o) => (
-          <OrderRow key={o.id} order={o} onPick={() => onPick(o)} />
-        ))}
+        {open.map(row)}
       </ul>
       {closed.length > 0 && (
         <>
@@ -339,9 +365,7 @@ function OrderList({ orders, onPick }: { orders: Order[]; onPick: (o: Order) => 
           )}
           {expanded && (
             <ul className="divide-y divide-slate-100 border-t border-slate-100">
-              {closed.map((o) => (
-                <OrderRow key={o.id} order={o} onPick={() => onPick(o)} />
-              ))}
+              {closed.map(row)}
             </ul>
           )}
         </>
@@ -350,14 +374,26 @@ function OrderList({ orders, onPick }: { orders: Order[]; onPick: (o: Order) => 
   );
 }
 
-function OrderRow({ order, onPick }: { order: Order; onPick: () => void }) {
+function OrderRow({
+  order,
+  refunds,
+  onPick,
+  onOpenConversation,
+}: {
+  order: Order;
+  refunds: CustomerRefund[];
+  onPick: () => void;
+  onOpenConversation: (id: string) => void;
+}) {
+  const [showRefunds, setShowRefunds] = useState(false);
   const age = daysSince(order.deliveredAt);
   const windowLeft = age === null ? null : 30 - age;
   const fullyRefunded = order.items.every((i) => i.refundedQuantity >= i.quantity);
+  const refundedCents = refunds.reduce((sum, r) => sum + r.amountCents, 0);
   const statusTone = { delivered: 'emerald', shipped: 'brand', processing: 'amber', cancelled: 'slate' } as const;
   return (
     <li>
-      <button type="button" onClick={onPick} className="w-full px-4 py-3 text-left transition hover:bg-slate-50" title="Reference this order in the chat">
+      <button type="button" onClick={onPick} className="w-full px-4 pt-3 text-left transition hover:bg-slate-50" title="Reference this order in the chat">
         <div className="flex items-center gap-2">
           <Package className="size-4 text-slate-400" aria-hidden />
           <span className="text-sm font-medium">{order.orderNumber}</span>
@@ -373,9 +409,11 @@ function OrderRow({ order, onPick }: { order: Order; onPick: () => void }) {
             </li>
           ))}
         </ul>
-        <p className="mt-1.5 pl-6 text-[11px] text-slate-500">
+        <p className={cx('mt-1.5 pl-6 text-[11px] text-slate-500', refunds.length === 0 && 'pb-3')}>
           {order.status === 'delivered'
-            ? `Delivered ${shortDate(order.deliveredAt)} · ${fullyRefunded ? 'refunded in full' : windowLeft !== null && windowLeft >= 0 ? `${windowLeft} days left to request a refund` : 'refund window closed'}`
+            ? `Delivered ${shortDate(order.deliveredAt)}${
+                fullyRefunded ? (refunds.length ? '' : ' · refunded in full') : windowLeft !== null && windowLeft >= 0 ? ` · ${windowLeft} days left to request a refund` : ' · refund window closed'
+              }`
             : order.status === 'shipped'
               ? `In transit · expected ${shortDate(order.expectedDeliveryAt)}`
               : order.status === 'processing'
@@ -383,7 +421,58 @@ function OrderRow({ order, onPick }: { order: Order; onPick: () => void }) {
                 : 'Cancelled'}
         </p>
       </button>
+      {refunds.length > 0 && (
+        <div className="px-4 pt-1.5 pb-3 pl-10">
+          <button
+            type="button"
+            onClick={() => setShowRefunds(!showRefunds)}
+            aria-expanded={showRefunds}
+            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 transition hover:bg-emerald-100"
+          >
+            {fullyRefunded ? 'Refunded in full' : 'Partly refunded'} · {money(refundedCents)}
+            <ChevronDown className={cx('size-3 transition', showRefunds && 'rotate-180')} aria-hidden />
+          </button>
+          {showRefunds && <RefundTimeline refunds={refunds} onOpenConversation={onOpenConversation} />}
+        </div>
+      )}
     </li>
+  );
+}
+
+const DECIDED_BY_TEXT: Record<CustomerRefund['decidedBy'], string> = {
+  earlier: 'Handled by our support team',
+  assistant: 'Approved by the refunds assistant',
+  specialist: 'Approved by a support specialist',
+};
+
+/** What was refunded, when, and how it was decided, oldest first, with a way back to the conversation. */
+function RefundTimeline({ refunds, onOpenConversation }: { refunds: CustomerRefund[]; onOpenConversation: (id: string) => void }) {
+  const sorted = [...refunds].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return (
+    <ol className="mt-2 space-y-2.5 border-l-2 border-emerald-100 pl-3">
+      {sorted.map((r) => (
+        <li key={r.id} className="relative text-xs">
+          <span className="absolute top-1 -left-[17px] size-2 rounded-full bg-emerald-500 ring-2 ring-white" aria-hidden />
+          <p className="font-medium text-slate-800">
+            {money(r.amountCents)} refunded <span className="font-normal text-slate-500">on {longDate(r.createdAt)}</span>
+          </p>
+          {r.items.length > 0 && <p className="text-slate-600">{r.items.join(', ')}</p>}
+          <p className="text-slate-500">
+            {DECIDED_BY_TEXT[r.decidedBy]}
+            {r.caseReference && <span className="font-mono whitespace-nowrap"> · {r.caseReference}</span>}
+          </p>
+          {r.conversationId && (
+            <button
+              type="button"
+              onClick={() => onOpenConversation(r.conversationId!)}
+              className="mt-0.5 inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"
+            >
+              <MessageSquareText className="size-3" aria-hidden /> View the conversation
+            </button>
+          )}
+        </li>
+      ))}
+    </ol>
   );
 }
 

@@ -39,6 +39,7 @@ export async function reviewRequest(input: ReviewInput) {
       try {
         await recordRefund(db, {
           refundId: `rfd_${randomUUID()}`,
+          requestId: row.id,
           orderId: row.order_id,
           customerId: row.customer_id,
           itemIds: paidLines.map((l) => l.itemId),

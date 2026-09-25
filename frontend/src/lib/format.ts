@@ -24,3 +24,5 @@ export const cx = (...classes: Array<string | false | null | undefined>) => clas
 
 /** Decision time in the unit a person would say: "340 ms" or "2.6 sec". */
 export const duration = (ms: number) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} sec`);
+
+export const longDate = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
