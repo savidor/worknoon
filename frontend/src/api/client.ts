@@ -295,3 +295,12 @@ export function adminUsername(): string | null {
     return null;
   }
 }
+
+export interface ConversationSummary {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  preview: string | null;
+  messageCount: number;
+  cases: Array<{ reference: string; status: Decision; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
+}

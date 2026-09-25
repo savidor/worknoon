@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { api, tokens, type Customer, type DemoCustomer, type Message, type Order } from '../api/client';
+import { api, tokens, type ConversationSummary, type Customer, type DemoCustomer, type Message, type Order } from '../api/client';
+import { EnquiryHistory } from '../components/EnquiryHistory';
 import { Button, Card, ErrorNote, OUTCOME_STYLE, OutcomeBadge, Pill, Spinner } from '../components/ui';
 import { cx, daysSince, money, shortDate, time } from '../lib/format';
 
@@ -69,6 +70,17 @@ export function ChatPage() {
   });
   const activeConversation = conversationId ?? current.data?.id ?? null;
 
+  const history = useQuery({
+    queryKey: ['conversations', customerId],
+    queryFn: () => api<{ conversations: ConversationSummary[] }>('/conversations', { role: 'customer' }),
+    enabled: !!customerId,
+    // Picks up specialist decisions made in the console.
+    refetchInterval: 15_000,
+  });
+  const latestId = history.data?.conversations[0]?.id;
+  const viewingEarlier = !!activeConversation && !!latestId && activeConversation !== latestId && history.data!.conversations.some((c) => c.id === activeConversation);
+  const openedAt = history.data?.conversations.find((c) => c.id === activeConversation)?.createdAt;
+
   const messages = useQuery({
     queryKey: ['messages', activeConversation],
     queryFn: () => api<{ messages: Message[] }>(`/conversations/${activeConversation}/messages`, { role: 'customer' }),
@@ -102,6 +114,7 @@ export function ChatPage() {
     onSettled: () => {
       setPending(null);
       void qc.invalidateQueries({ queryKey: ['me', customerId] });
+      void qc.invalidateQueries({ queryKey: ['conversations', customerId] });
     },
   });
 
@@ -188,6 +201,8 @@ export function ChatPage() {
             </ul>
           )}
         </Card>
+
+        <EnquiryHistory conversations={history.data?.conversations} loading={history.isLoading} activeId={activeConversation} onOpen={setConversationId} />
       </aside>
 
       <Card className="flex h-[calc(100dvh-7.5rem)] min-h-[540px] flex-col overflow-hidden">
@@ -203,6 +218,17 @@ export function ChatPage() {
             <RotateCcw className="size-4" aria-hidden /> New chat
           </Button>
         </header>
+
+        {viewingEarlier && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-100 bg-amber-50/70 px-4 py-2 text-xs text-amber-900">
+            <span>
+              Earlier conversation{openedAt ? ` from ${shortDate(openedAt)}` : ''}. You can carry on here, or go back to your latest one.
+            </span>
+            <button type="button" onClick={() => setConversationId(latestId!)} className="ml-auto font-medium underline-offset-2 hover:underline">
+              Back to latest
+            </button>
+          </div>
+        )}
 
         <div ref={scrollRef} className="scrollbar-thin flex-1 space-y-4 overflow-y-auto bg-slate-50/60 px-4 py-5" aria-live="polite">
           {list.length === 0 && !pending && (

@@ -7,6 +7,7 @@ import {
   createConversation,
   getConversation,
   latestConversationFor,
+  listConversationsFor,
   listMessages,
 } from '../repositories/conversation.repo.js';
 import { getCustomer, listOrdersForCustomer } from '../repositories/crm.repo.js';
@@ -35,6 +36,11 @@ customerRouter.get('/me', async (req, res) => {
 
 customerRouter.post('/conversations', async (req, res) => {
   res.status(201).json(await createConversation(customerId(req)));
+});
+
+/** Earlier enquiries, each with how it ended, so a customer can pick up where they left off. */
+customerRouter.get('/conversations', async (req, res) => {
+  res.json({ conversations: await listConversationsFor(customerId(req)) });
 });
 
 /** Resumes the most recent conversation, or starts one. */

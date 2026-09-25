@@ -259,6 +259,24 @@ async function main() {
   const month = (await call('GET', '/admin/stats?days=30', { token: admin })).json;
   check('activity chart covers the chosen range', month.daily.length === 30 && month.refunded_auto_cents + month.refunded_team_cents === month.refunded_cents);
 
+  console.log('\nEnquiry history');
+  const amaraToken = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_01' } })).json.token;
+  const history = (await call('GET', '/conversations', { token: amaraToken })).json.conversations ?? [];
+  check(
+    'customers can reopen earlier enquiries and see how each one ended',
+    history.length >= 1 && history[0].preview?.includes('AuraSound') && history[0].cases.some((c) => c.status === 'APPROVED' && c.orderNumber === 'WN-10001'),
+    JSON.stringify(history[0]),
+  );
+  check('enquiry history carries no internal risk detail', !/risk|flag|rule|internal/i.test(JSON.stringify(history)));
+  const reopened = await call('GET', `/conversations/${history[0]?.id}/messages`, { token: amaraToken });
+  check('an earlier enquiry opens with its full transcript', reopened.status === 200 && reopened.json.messages.length === history[0].messageCount);
+  const otherToken = (await call('POST', '/auth/customer/demo-login', { body: { customerId: 'cus_02' } })).json.token;
+  const otherHistory = (await call('GET', '/conversations', { token: otherToken })).json.conversations ?? [];
+  check(
+    "another customer's enquiries stay private",
+    !otherHistory.some((c) => c.id === history[0]?.id) && (await call('GET', `/conversations/${history[0]?.id}/messages`, { token: otherToken })).status === 404,
+  );
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);
 }

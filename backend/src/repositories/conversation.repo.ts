@@ -91,3 +91,49 @@ export async function addMessage(
   await db.query('UPDATE conversations SET updated_at = now() WHERE id = $1', [args.conversationId]);
   return toMessage(rows[0]!);
 }
+
+export interface ConversationSummary {
+  id: string;
+  createdAt: Date;
+  updatedAt: Date;
+  preview: string | null;
+  messageCount: number;
+  /** Customer-safe view of each decision: never risk flags, rule ids or internal notes. */
+  cases: Array<{ reference: string; status: string; amountCents: number; orderNumber: string | null; reviewed: boolean }>;
+}
+
+/** A customer's earlier enquiries, newest first. Conversations with no messages are left out. */
+export async function listConversationsFor(customerId: string, limit = 20): Promise<ConversationSummary[]> {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.created_at, c.updated_at, first.content AS preview, counts.n AS message_count,
+            COALESCE(cases.list, '[]') AS cases
+     FROM conversations c
+     CROSS JOIN LATERAL (SELECT count(*)::int AS n FROM messages m WHERE m.conversation_id = c.id) counts
+     LEFT JOIN LATERAL (
+       SELECT content FROM messages m WHERE m.conversation_id = c.id AND m.role = 'customer' ORDER BY created_at LIMIT 1
+     ) first ON true
+     LEFT JOIN LATERAL (
+       SELECT json_agg(json_build_object(
+                'reference', r.reference,
+                'status', r.status,
+                'amountCents', CASE WHEN r.status = 'APPROVED' THEN r.refund_amount_cents ELSE r.review_amount_cents END,
+                'orderNumber', o.order_number,
+                'reviewed', r.reviewed_at IS NOT NULL
+              ) ORDER BY r.created_at) AS list
+       FROM refund_requests r LEFT JOIN orders o ON o.id = r.order_id
+       WHERE r.conversation_id = c.id
+     ) cases ON true
+     WHERE c.customer_id = $1 AND counts.n > 0
+     ORDER BY c.updated_at DESC
+     LIMIT $2`,
+    [customerId, limit],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    preview: r.preview,
+    messageCount: r.message_count,
+    cases: r.cases,
+  }));
+}
