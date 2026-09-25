@@ -3,7 +3,7 @@ import { ArrowUp, ChevronRight, MessageSquareText, Package, RotateCcw, Sparkles,
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { api, tokens, type ConversationSummary, type Customer, type CustomerRefund, type DemoCustomer, type Message, type Order } from '../api/client';
 import { EnquiryHistory } from '../components/EnquiryHistory';
-import { Button, Card, ErrorNote, OUTCOME_STYLE, OutcomeBadge, Pill, Spinner } from '../components/ui';
+import { Avatar, Button, Card, ErrorNote, OUTCOME_STYLE, OutcomeBadge, Pill, Spinner } from '../components/ui';
 import { cx, daysSince, money, shortDate, stamp } from '../lib/format';
 
 const MAX_CHARS = 2000;
@@ -24,6 +24,7 @@ export function ChatPage() {
   // The customer's live chat, and whether they are looking back at an earlier conversation.
   const [liveId, setLiveId] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState(false);
+  const [panel, setPanel] = useState<'orders' | 'conversations'>('orders');
   const chatRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState('');
   // The message being sent, and how many messages existed when it was sent, so the placeholder
@@ -190,16 +191,19 @@ export function ChatPage() {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
-      <aside className="order-last space-y-4 lg:order-first">
-        <Card title="Demo customer" action={<Pill tone="brand">Demo mode</Pill>}>
-          <div className="space-y-3 p-4">
-            <label className="block text-xs font-medium text-slate-500" htmlFor="customer">
+    // A fixed workspace on desktop: the page never scrolls, each panel scrolls inside itself.
+    <div className="grid grid-cols-1 gap-4 lg:h-[calc(100dvh-6rem)] lg:min-h-[520px] lg:grid-cols-[340px_minmax(0,1fr)]">
+      <aside className="order-last flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:order-first">
+        {/* Who is signed in: compact, so the lists below get the room. */}
+        <div className="border-b border-slate-100 p-3">
+          <div className="flex items-center gap-2">
+            {me.data && <Avatar name={me.data.customer.name} />}
+            <label className="sr-only" htmlFor="customer">
               Signed in as
             </label>
             <select
               id="customer"
-              className="w-full rounded-lg border-slate-300 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+              className="min-w-0 flex-1 rounded-lg bg-white px-2.5 py-1.5 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-brand-500 focus:outline-none"
               value={customerId ?? ''}
               onChange={(e) => login.mutate(e.target.value)}
               disabled={login.isPending}
@@ -210,51 +214,81 @@ export function ChatPage() {
                 </option>
               ))}
             </select>
-            {selected?.scenario && (
-              // A presenter's note, folded away so the chat looks like what a real customer sees.
-              <details key={selected.id} className="group rounded-lg text-xs text-slate-600">
-                <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-slate-500 hover:text-slate-800 [&::-webkit-details-marker]:hidden">
-                  <ChevronRight className="size-3.5 transition group-open:rotate-90" aria-hidden />
-                  What this demo tests
-                </summary>
-                <div className="mt-2 rounded-lg bg-slate-50 p-3">
-                  <p className="font-medium text-slate-800">{selected.scenario.title}</p>
-                  <p className="mt-1">
-                    Expected outcome:{' '}
-                    {selected.scenario.expected in OUTCOME_STYLE ? (
-                      <OutcomeBadge outcome={selected.scenario.expected as keyof typeof OUTCOME_STYLE} />
-                    ) : (
-                      selected.scenario.expected
-                    )}
-                  </p>
-                </div>
-              </details>
-            )}
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              Stands in for the store login. The API takes the customer's identity from this session only, never from what
-              they type.
-            </p>
           </div>
-        </Card>
-
-        <Card title="Your orders">
-          {me.isLoading ? (
-            <Spinner />
-          ) : (
-            <OrderList
-              orders={me.data?.orders ?? []}
-              refunds={refunds.data?.refunds ?? []}
-              onPick={(o) => insert(`About order ${o.orderNumber}: `)}
-              onOpenConversation={openHistory}
-            />
+          <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+            <Pill tone="brand">Demo mode</Pill>
+            <span className="truncate" title="Stands in for the store login. The API takes the customer's identity from this session only, never from what they type.">
+              Stands in for the store login
+            </span>
+          </div>
+          {selected?.scenario && (
+            // A presenter's note, folded away so the chat looks like what a real customer sees.
+            <details key={selected.id} className="group mt-2 text-xs text-slate-600">
+              <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-slate-500 hover:text-slate-800 [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="size-3.5 transition group-open:rotate-90" aria-hidden />
+                What this demo tests
+              </summary>
+              <div className="mt-2 rounded-lg bg-slate-50 p-2.5">
+                <p className="font-medium text-slate-800">{selected.scenario.title}</p>
+                <p className="mt-1">
+                  Expected outcome:{' '}
+                  {selected.scenario.expected in OUTCOME_STYLE ? (
+                    <OutcomeBadge outcome={selected.scenario.expected as keyof typeof OUTCOME_STYLE} />
+                  ) : (
+                    selected.scenario.expected
+                  )}
+                </p>
+              </div>
+            </details>
           )}
-        </Card>
+        </div>
 
-        <EnquiryHistory conversations={history.data?.conversations} loading={history.isLoading} activeId={activeConversation} onOpen={openHistory} />
+        <div className="flex gap-1 border-b border-slate-100 px-3 pt-2" role="tablist" aria-label="Your account">
+          {(
+            [
+              { id: 'orders', label: 'Orders', count: me.data?.orders.length },
+              { id: 'conversations', label: 'Conversations', count: history.data?.conversations.length },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`tab-${t.id}`}
+              aria-selected={panel === t.id}
+              aria-controls="account-panel"
+              onClick={() => setPanel(t.id)}
+              className={cx(
+                '-mb-px inline-flex items-center gap-1.5 border-b-2 px-2.5 pb-2 text-sm font-medium transition',
+                panel === t.id ? 'border-brand-600 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800',
+              )}
+            >
+              {t.label}
+              {!!t.count && <span className="rounded-full bg-slate-100 px-1.5 text-[11px] text-slate-600 tabular-nums">{t.count}</span>}
+            </button>
+          ))}
+        </div>
+
+        <div id="account-panel" role="tabpanel" aria-labelledby={`tab-${panel}`} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+          {panel === 'orders' ? (
+            me.isLoading ? (
+              <Spinner />
+            ) : (
+              <OrderList
+                orders={me.data?.orders ?? []}
+                refunds={refunds.data?.refunds ?? []}
+                onPick={(o) => insert(`About order ${o.orderNumber}: `)}
+                onOpenConversation={openHistory}
+              />
+            )
+          ) : (
+            <EnquiryHistory conversations={history.data?.conversations} loading={history.isLoading} activeId={activeConversation} onOpen={openHistory} />
+          )}
+        </div>
       </aside>
 
-      <div ref={chatRef} className="min-w-0 scroll-mt-20">
-      <Card className="flex h-[calc(100dvh-7.5rem)] min-h-[540px] flex-col overflow-hidden">
+      <div ref={chatRef} className="min-h-0 min-w-0 scroll-mt-20">
+      <Card className="flex h-[calc(100dvh-7.5rem)] min-h-[520px] flex-col overflow-hidden lg:h-full lg:min-h-0">
         <header className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
           <div className="grid size-9 place-items-center rounded-full bg-brand-600 text-white">
             <Sparkles className="size-4" aria-hidden />
