@@ -110,6 +110,18 @@ async function main() {
     }
   }
 
+  console.log('\nItems the customer does not own');
+  const sofia = await customerSession('cus_03');
+  const gucci = await say(sofia, 'I want a refund on my Gucci handbag');
+  check('an unknown item gets a polite question listing what they own, not a guess', gucci.outcome === 'NEEDS_INFO' && gucci.assistantMessage.content.includes('Gucci handbag') && gucci.assistantMessage.content.includes('WN-10003'), gucci.assistantMessage.content);
+  const corrected = await say(sofia, 'Sorry, I meant the silk dress, I changed my mind about it.');
+  check('a correction continues with the real item', corrected.outcome === 'DENIED' && corrected.assistantMessage.meta.orderNumber === 'WN-10003', corrected.outcome);
+  const jamesS = await customerSession('cus_02');
+  await say(jamesS, 'Refund my Nike jacket please, it is damaged.');
+  const insist = await say(jamesS, 'It is a Nike jacket, I definitely bought it here.');
+  const insistCase = insist.caseId ? (await call('GET', `/admin/requests/${insist.caseId}`, { token: admin })).json.request : null;
+  check('insisting on an item not on the account goes to a specialist, flagged', insist.outcome === 'ESCALATED' && insistCase?.risk_flags.includes('claim_mismatch') && insistCase?.refund_amount_cents === 0, insist.outcome);
+
   const greeter = await customerSession('cus_06');
   const hello = await say(greeter, 'Hello, good morning');
   check('a greeting gets a greeting, not an unrequested order status', hello.outcome === 'INFO' && !/delivered|WN-\d{5}/.test(hello.assistantMessage.content), hello.assistantMessage.content);

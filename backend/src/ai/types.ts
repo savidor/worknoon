@@ -31,6 +31,8 @@ export interface ReplyContext {
   reasons: string[];
   /** What we still need from the customer (NEEDS_INFO). */
   missingInfo: string[];
+  /** Products the customer named that are not on any of their orders. */
+  unknownItems: string[];
   /** Orders to offer as choices, or a status line for INFO replies. */
   orderChoices: string[];
   statusLine: string | null;

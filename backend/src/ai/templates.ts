@@ -53,7 +53,14 @@ export function templateReply(ctx: ReplyContext): ReplyDraft {
         : ctx.orderChoices.length === 1 ? ` Your recent order is ${ctx.orderChoices[0]}.` : '';
       const example = ' For example, did it arrive damaged, was it the wrong item, or did you change your mind?';
       let ask: string;
-      if (badOrder) {
+      if (ctx.missingInfo.includes('unknown_item')) {
+        const named = ctx.unknownItems.join(' or ') || 'that item';
+        const owned = ctx.orderChoices.length > 1
+          ? ` Your orders include ${ctx.orderChoices.slice(0, -1).join(', ')} and ${ctx.orderChoices.at(-1)}.`
+          : ctx.orderChoices.length === 1 ? ` Your order on file is ${ctx.orderChoices[0]}.` : '';
+        const article = /^[aeiou]/i.test(named) || /^(HP|LG|MSI)\b/.test(named) ? 'an' : 'a';
+        ask = `I couldn't find ${article} ${named} on your account.${owned} ${ctx.orderChoices.length === 1 ? 'Is that the one you mean?' : 'Is it one of these?'} If you bought it from another store or on a different account, just let me know.`;
+      } else if (badOrder) {
         ask = `I couldn't find that order number on your account. Could you double-check it?${choices}`;
       } else if (needOrder && needReason) {
         ask = `Could you tell me which order this is about and what went wrong?${choices}${example}`;

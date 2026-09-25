@@ -31,6 +31,7 @@ const ctx: ReplyContext = {
   reviewItems: [],
   reasons: [],
   missingInfo: [],
+  unknownItems: [],
   orderChoices: [],
   statusLine: null,
   isDuplicate: false,

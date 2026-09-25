@@ -242,6 +242,41 @@ export async function handleCustomerTurn(args: {
     });
   }
 
+  // 5b. The customer named a product that is not on their account. Never swap in a different
+  // item. Ask once, listing what they do have; if they insist, a specialist checks it.
+  if (manipulation.length === 0 && extraction.unknownItemMentions.length > 0 && extraction.itemSkus.length === 0) {
+    const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
+    const alreadyAsked = lastAssistant?.meta?.missingInfo?.includes('unknown_item') ?? false;
+    const claimed = [...new Set([...(alreadyAsked ? (lastAssistant?.meta?.unknownItems ?? []) : []), ...extraction.unknownItemMentions])];
+    if (alreadyAsked) {
+      audit.push({
+        conversationId,
+        actor: 'system',
+        type: 'security.unknown_item_claim',
+        severity: 'warning',
+        detail: { claimed, ownedOrders: orders.map((o) => o.orderNumber), excerpt: text.slice(0, 280) },
+      });
+      return createCase({
+        trace, audit, started, policy, aiHealthy, conversationId, customer, customerMessage, extraction, reason: extraction.reasonCategory,
+        order: null,
+        evaluation: {
+          decision: 'ESCALATED',
+          lines: [],
+          rules: [{ id: 'CLAIM_MISMATCH', effect: 'ESCALATED', detail: `Customer asked twice about ${claimed.map((c) => `"${c}"`).join(', ')}, which is not on any of their orders.` }],
+          riskFlags: ['claim_mismatch'],
+          refundAmountCents: 0,
+          reviewAmountCents: 0,
+        },
+        aiProviderUsed: extractionCall.provider,
+      });
+    }
+    return replyWithoutCase({
+      trace, audit, started, policy, aiHealthy, conversationId, customerMessage, extraction, outcome: 'NEEDS_INFO',
+      ctx: { ...ctxBase, outcome: 'NEEDS_INFO', missingInfo: ['unknown_item'], unknownItems: extraction.unknownItemMentions },
+      metaExtra: { missingInfo: ['unknown_item'], unknownItems: extraction.unknownItemMentions },
+    });
+  }
+
   let reason: ReasonCategory = extraction.reasonCategory;
   if (reason === 'unknown' && (extraction.intent === 'cancel_request' || order?.status === 'processing')) {
     reason = 'cancel_order';
@@ -272,6 +307,7 @@ export async function handleCustomerTurn(args: {
     return replyWithoutCase({
       trace, audit, started, policy, aiHealthy, conversationId, customerMessage, extraction, outcome: 'NEEDS_INFO',
       ctx: { ...ctxBase, outcome: 'NEEDS_INFO', orderNumber: order?.orderNumber ?? null, missingInfo: missing },
+      metaExtra: { missingInfo: missing },
     });
   }
 
@@ -394,6 +430,7 @@ const emptyCtx: Omit<ReplyContext, 'outcome' | 'customerFirstName' | 'customerMe
   reviewItems: [],
   reasons: [],
   missingInfo: [],
+  unknownItems: [],
   orderChoices: [],
   statusLine: null,
   isDuplicate: false,

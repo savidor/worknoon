@@ -12,6 +12,9 @@ export interface MessageMeta {
   reviewAmountCents?: number;
   lines?: Array<{ name: string; amountCents: number; decision: string }>;
   reasons?: string[];
+  /** What a clarifying question asked for, so the next turn knows the context. */
+  missingInfo?: string[];
+  unknownItems?: string[];
 }
 
 export interface Message {

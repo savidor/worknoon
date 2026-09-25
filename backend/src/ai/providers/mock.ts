@@ -17,6 +17,36 @@ const REFUND_WORDS = /\b(refund|return|money back|reimburse|send (it|them) back|
 const INQUIRY_WORDS = /\b(where is|status|track(ing)?|when will|has (it|my order) shipped)\b/i;
 const STOPWORDS = new Set(['with', 'from', 'this', 'that', 'final', 'sale', 'pro', 'set', 'the', 'and', 'for']);
 
+const PRODUCT_NOUNS =
+  'laptop|notebook|macbook|phone|smartphone|iphone|tablet|ipad|tv|television|monitor|headphones|earbuds|speaker|watch|smartwatch|camera|console|keyboard|mouse|jacket|coat|dress|shirt|jeans|shoes|sneakers|trainers|boots|bag|handbag|blender|fryer|kettle|toaster|vacuum|printer|router|desk|chair|sofa';
+// "my HP laptop", "an Apple watch", "the Samsung TV": up to three qualifiers before a product noun.
+const PRODUCT_PHRASE = new RegExp(`\\b(?:my|the|an?|this|that|our)\\s+((?:[\\w-]+\\s+){0,3}?(?:${PRODUCT_NOUNS}))\\b`, 'gi');
+
+/**
+ * Finds products the customer names that are not on their orders. A capitalised qualifier
+ * such as a brand ("HP laptop") must appear in an item's name for the item to count as a
+ * match; otherwise the mention is unknown, and the product word must not match a different
+ * item (an HP laptop is not the customer's ZenBook).
+ */
+function unknownProducts(text: string, itemNames: string[]): { mentions: string[]; nouns: Set<string> } {
+  const names = itemNames.map((n) => n.toLowerCase());
+  const mentions: string[] = [];
+  const nouns = new Set<string>();
+  for (const m of text.matchAll(PRODUCT_PHRASE)) {
+    const phrase = m[1]!.trim();
+    const words = phrase.split(/\s+/);
+    const noun = words.at(-1)!.toLowerCase();
+    const brands = words.slice(0, -1).filter((w) => /^[A-Z0-9]/.test(w) && w.length >= 2).map((w) => w.toLowerCase());
+    const sameKind = names.filter((n) => n.includes(noun));
+    const known = sameKind.some((n) => brands.every((b) => n.includes(b)));
+    if (!known) {
+      mentions.push(phrase);
+      nouns.add(noun);
+    }
+  }
+  return { mentions: [...new Set(mentions)], nouns };
+}
+
 function detectReason(text: string): ReasonCategory {
   return REASONS.find(([, re]) => re.test(text))?.[0] ?? 'unknown';
 }
@@ -59,13 +89,14 @@ export class MockProvider implements AiProvider {
     const lower = text.toLowerCase();
     const candidateOrders = orderNumber ? ctx.orders.filter((o) => o.orderNumber === orderNumber) : ctx.orders;
     const candidateItems = candidateOrders.flatMap((o) => o.items);
+    const unknown = unknownProducts(text, ctx.orders.flatMap((o) => o.items.map((i) => i.name)));
     const tokenOwners = new Map<string, number>();
     for (const item of candidateItems) for (const t of new Set(tokens(item.name))) tokenOwners.set(t, (tokenOwners.get(t) ?? 0) + 1);
     const itemSkus = candidateItems
       .filter(
         (i) =>
           lower.includes(i.sku.toLowerCase()) ||
-          tokens(i.name).some((t) => tokenOwners.get(t) === 1 && new RegExp(`\\b${t}`).test(lower)),
+          tokens(i.name).some((t) => !unknown.nouns.has(t) && tokenOwners.get(t) === 1 && new RegExp(`\\b${t}`).test(lower)),
       )
       .map((i) => i.sku);
 
@@ -91,7 +122,7 @@ export class MockProvider implements AiProvider {
         reasonCategory,
         reasonSummary: `Customer message classified by keyword heuristics as ${reasonCategory.replaceAll('_', ' ')}.`,
         claimedAmount: amount ? Number(amount.replace(/,/g, '')) : null,
-        unknownItemMentions: [],
+        unknownItemMentions: unknown.mentions,
         manipulationSignals: scan.flagged ? scan.matches.map((m) => `heuristic:${m}`) : [],
         confidence: intent === 'other' ? 0.5 : reasonCategory === 'unknown' ? 0.7 : 0.85,
       },
