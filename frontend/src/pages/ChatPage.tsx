@@ -1,13 +1,45 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, ChevronRight, MessageSquareText, Package, RotateCcw, Sparkles, UserRound, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { api, tokens, type ConversationSummary, type Customer, type CustomerRefund, type DemoCustomer, type Message, type Order } from '../api/client';
+import { ApiError, api, tokens, type ConversationSummary, type Customer, type CustomerRefund, type DemoCustomer, type Message, type Order } from '../api/client';
 import { EnquiryHistory } from '../components/EnquiryHistory';
 import { Avatar, Button, Card, ErrorNote, OUTCOME_STYLE, OutcomeBadge, Pill, Spinner } from '../components/ui';
 import { cx, daysSince, money, shortDate, stamp } from '../lib/format';
 
 const MAX_CHARS = 2000;
 const CUSTOMER_KEY = 'rd.customerId';
+/** After the proxy gives up on a send, how long to keep watching for the reply, and how often. */
+const LATE_REPLY_WAIT_MS = 60_000;
+const LATE_REPLY_POLL_MS = 3_000;
+
+/** The message was saved but its reply has not arrived yet; the regular poll will show it. */
+class ReplyStillPending extends Error {}
+
+type SendResult = { customerMessage: Message; assistantMessage: Message };
+
+/**
+ * A 504 comes from the proxy, not the API: the backend may still be working and will save both
+ * messages when it finishes. Watch the conversation for them instead of reporting a failure
+ * that did not happen (and inviting a duplicate send).
+ */
+async function awaitLateReply(conversationId: string, baseCount: number, cause: unknown): Promise<SendResult> {
+  const deadline = Date.now() + LATE_REPLY_WAIT_MS;
+  let saved = false;
+  while (Date.now() < deadline) {
+    const { messages } = await api<{ messages: Message[] }>(`/conversations/${conversationId}/messages`, { role: 'customer' });
+    const fresh = messages.slice(baseCount);
+    // Only one send is in flight, so the first new customer message is ours (the server normalises its text).
+    const at = fresh.findIndex((m) => m.role === 'customer');
+    if (at >= 0) {
+      saved = true;
+      const reply = fresh.slice(at + 1).find((m) => m.role === 'assistant');
+      if (reply) return { customerMessage: fresh[at]!, assistantMessage: reply };
+    }
+    await new Promise((r) => setTimeout(r, LATE_REPLY_POLL_MS));
+  }
+  if (saved) throw new ReplyStillPending('This is taking longer than usual. Your message was received and the reply will appear here shortly.');
+  throw cause;
+}
 
 function readStoredCustomer(): string | null {
   try {
@@ -118,18 +150,24 @@ export function ChatPage() {
   });
 
   const send = useMutation({
-    mutationFn: (content: string) =>
-      api<{ customerMessage: Message; assistantMessage: Message }>(`/conversations/${activeConversation}/messages`, {
-        method: 'POST',
-        body: { content },
-        role: 'customer',
-      }),
+    mutationFn: async (content: string) => {
+      const conversation = activeConversation!;
+      const baseCount = qc.getQueryData<{ messages: Message[] }>(['messages', conversation])?.messages.length ?? 0;
+      try {
+        return await api<SendResult>(`/conversations/${conversation}/messages`, { method: 'POST', body: { content }, role: 'customer' });
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 504)) throw err;
+        return awaitLateReply(conversation, baseCount, err);
+      }
+    },
     onMutate: (content) => {
       const saved = qc.getQueryData<{ messages: Message[] }>(['messages', activeConversation]);
       setPending({ content, baseCount: saved?.messages.length ?? 0 });
     },
-    // Never lose what the customer typed: put it back so they can retry.
-    onError: (_err, content) => setDraft((d) => d || content),
+    // Never lose what the customer typed: put it back so they can retry, unless it was saved.
+    onError: (err, content) => {
+      if (!(err instanceof ReplyStillPending)) setDraft((d) => d || content);
+    },
     // Show the reply the moment it arrives: the response contains both messages, so there is
     // no need to wait for a refetch. Orders refresh in the background (refund badges).
     onSuccess: (res) => {
@@ -341,7 +379,11 @@ export function ChatPage() {
               <TypingIndicator />
             </>
           )}
-          <ErrorNote error={send.error} />
+          {send.error instanceof ReplyStillPending ? (
+            list.at(-1)?.role !== 'assistant' && <p className="text-center text-xs text-slate-500">{send.error.message}</p>
+          ) : (
+            <ErrorNote error={send.error} />
+          )}
         </div>
 
         <div className="border-t border-slate-100 bg-white p-3">
